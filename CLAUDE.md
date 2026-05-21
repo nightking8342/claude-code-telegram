@@ -12,6 +12,7 @@ Telegram bot providing remote access to Claude Code. Python 3.10+, built with Po
 make dev              # Install all deps (including dev)
 make install          # Production deps only
 make run              # Run the bot
+make run-watch        # Run with auto-restart on src/ changes (watchfiles)
 make run-debug        # Run with debug logging
 make test             # Run tests with coverage
 make lint             # Black + isort + flake8 + mypy
@@ -22,7 +23,13 @@ poetry run pytest tests/unit/test_config.py -k test_name -v
 
 # Type checking only
 poetry run mypy src
+
+# Release: bump version, commit, tag, then push tag to trigger release workflow
+make bump-patch       # or bump-minor / bump-major
+make release
 ```
+
+Pre-commit hooks run lint on commit (see `.pre-commit-config.yaml`); install with `pre-commit install` after `make dev`.
 
 ## Architecture
 
