@@ -134,6 +134,7 @@ class MessageOrchestrator:
         self.settings = settings
         self.deps = deps
         self._active_requests: Dict[int, ActiveRequest] = {}
+        self._pending_auq: Dict[str, asyncio.Future] = {}
         self._known_commands: frozenset[str] = frozenset()
 
     def _inject_deps(self, handler: Callable) -> Callable:  # type: ignore[type-arg]
@@ -387,6 +388,14 @@ class MessageOrchestrator:
             CallbackQueryHandler(
                 self._inject_deps(self._handle_stop_callback),
                 pattern=r"^stop:",
+            )
+        )
+
+        # AskUserQuestion button callbacks
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_auq_callback),
+                pattern=r"^auq:",
             )
         )
 
@@ -1145,6 +1154,10 @@ class MessageOrchestrator:
         heartbeat = self._start_typing_heartbeat(chat)
 
         success = True
+        # Build AskUserQuestion hook for this request
+        auq_hooks = self._build_auq_hook(
+            bot=context.bot, chat_id=chat.id, user_id=user_id
+        )
         try:
             claude_response = await claude_integration.run_command(
                 prompt=message_text,
@@ -1154,6 +1167,7 @@ class MessageOrchestrator:
                 on_stream=on_stream,
                 force_new=force_new,
                 interrupt_event=interrupt_event,
+                hooks=auq_hooks,
             )
 
             # New session created successfully — clear the one-shot flag
@@ -1396,6 +1410,10 @@ class MessageOrchestrator:
         )
 
         heartbeat = self._start_typing_heartbeat(chat)
+        # Build AskUserQuestion hook for this request
+        auq_hooks = self._build_auq_hook(
+            bot=context.bot, chat_id=chat.id, user_id=user_id
+        )
         try:
             claude_response = await claude_integration.run_command(
                 prompt=prompt,
@@ -1404,6 +1422,7 @@ class MessageOrchestrator:
                 session_id=session_id,
                 on_stream=on_stream,
                 force_new=force_new,
+                hooks=auq_hooks,
             )
 
             if force_new:
@@ -1605,6 +1624,10 @@ class MessageOrchestrator:
         )
 
         heartbeat = self._start_typing_heartbeat(chat)
+        # Build AskUserQuestion hook for this request
+        auq_hooks = self._build_auq_hook(
+            bot=context.bot, chat_id=chat.id, user_id=user_id
+        )
         try:
             claude_response = await claude_integration.run_command(
                 prompt=prompt,
@@ -1614,6 +1637,7 @@ class MessageOrchestrator:
                 on_stream=on_stream,
                 force_new=force_new,
                 images=images,
+                hooks=auq_hooks,
             )
         finally:
             heartbeat.cancel()
@@ -1840,6 +1864,365 @@ class MessageOrchestrator:
             await active.progress_msg.edit_text("Stopping...", reply_markup=None)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------ #
+    #  AskUserQuestion → Telegram inline keyboard                         #
+    # ------------------------------------------------------------------ #
+
+    def _build_auq_hook(
+        self, bot: Any, chat_id: int, user_id: int
+    ) -> Dict[str, Any]:
+        """Build a PreToolUse hook dict for AskUserQuestion.
+
+        Returns a dict suitable for passing as ``hooks`` to
+        ``ClaudeIntegration.run_command()``.
+        """
+        orchestrator_ref = self  # capture for closure
+
+        async def _auq_hook(
+            hook_input: dict, stdin: Any = None, context: Any = None
+        ) -> dict:
+            tool_input = hook_input.get("tool_input", {})
+            tool_use_id = hook_input.get("tool_use_id", "unknown")
+            questions = tool_input.get("questions", [])
+
+            if not questions:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "No questions provided in AskUserQuestion call"
+                        ),
+                    }
+                }
+
+            # Take the first question (AskUserQuestion sends one at a time)
+            q = questions[0]
+            question_text = q.get("question", "")
+            options = q.get("options", [])
+            multi_select = q.get("multiSelect", False)
+            header = q.get("header", "")
+
+            if not options:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "No options provided in AskUserQuestion call"
+                        ),
+                    }
+                }
+
+            # Truncate tool_use_id for Telegram's 64-byte callback_data limit
+            tid_short = tool_use_id[:16]
+
+            # Create Future for hook↔callback communication
+            future: asyncio.Future = asyncio.get_event_loop().create_future()
+            orchestrator_ref._pending_auq[tool_use_id] = future
+
+            try:
+                # Send Telegram message with buttons
+                await orchestrator_ref._send_auq_message(
+                    bot=bot,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    question_text=question_text,
+                    options=options,
+                    multi_select=multi_select,
+                    header=header,
+                    tid_short=tid_short,
+                    tool_use_id=tool_use_id,
+                )
+
+                # Wait for user answer (no单独 timeout; CLAUDE_TIMEOUT_SECONDS兜底)
+                result = await future
+
+                selected = result.get("selected", [])
+                answer_str = ", ".join(f"'{s}'" for s in selected)
+
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            f"User selected: {answer_str} (via Telegram)"
+                        ),
+                        "additionalContext": (
+                            f"The user was asked '{question_text}' "
+                            f"and chose: {', '.join(selected)}"
+                        ),
+                    }
+                }
+            except asyncio.CancelledError:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "AskUserQuestion was cancelled"
+                        ),
+                    }
+                }
+            except Exception as exc:
+                logger.error("AskUserQuestion hook error", error=str(exc))
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            f"Error processing question: {exc}"
+                        ),
+                    }
+                }
+            finally:
+                orchestrator_ref._pending_auq.pop(tool_use_id, None)
+
+        return {
+            "PreToolUse": [
+                {
+                    "matcher": "AskUserQuestion",
+                    "hooks": [_auq_hook],
+                }
+            ]
+        }
+
+    async def _send_auq_message(
+        self,
+        bot: Any,
+        chat_id: int,
+        user_id: int,
+        question_text: str,
+        options: List[Dict[str, Any]],
+        multi_select: bool,
+        header: str,
+        tid_short: str,
+        tool_use_id: str,
+    ) -> None:
+        """Send AskUserQuestion as Telegram inline keyboard."""
+        header_line = f"<b>{escape_html(header)}</b>\n" if header else ""
+        mode_hint = (
+            "\n<i>可多选，选完点「确认选择」</i>" if multi_select else ""
+        )
+        text = (
+            f"🤔 {header_line}<b>Claude 想问你：</b>\n"
+            f"{escape_html(question_text)}{mode_hint}"
+        )
+
+        buttons: List[List[InlineKeyboardButton]] = []
+        if multi_select:
+            # Track selected state in user_data keyed by tool_use_id
+            # Initialize all as unselected
+            self._auq_multi_state: Dict[str, List[bool]] = getattr(
+                self, "_auq_multi_state", {}
+            )
+            self._auq_multi_state[tool_use_id] = [False] * len(options)
+
+            row: List[InlineKeyboardButton] = []
+            for idx, opt in enumerate(options[:4]):
+                label = opt.get("label", f"Option {idx + 1}")
+                btn_text = f"☐ {label}"
+                row.append(
+                    InlineKeyboardButton(
+                        btn_text, callback_data=f"auq:{tid_short}:{idx}"
+                    )
+                )
+                # 2 buttons per row for multi-select (wider buttons)
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            # Confirm button
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "✅ 确认选择",
+                        callback_data=f"auq:{tid_short}:confirm",
+                    )
+                ]
+            )
+        else:
+            for idx, opt in enumerate(options[:4]):
+                label = opt.get("label", f"Option {idx + 1}")
+                desc = opt.get("description", "")
+                btn_text = f"{label}" + (f" — {desc}" if desc else "")
+                # Truncate button text to ~50 chars for readability
+                if len(btn_text) > 50:
+                    btn_text = btn_text[:47] + "..."
+                buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            btn_text,
+                            callback_data=f"auq:{tid_short}:{idx}",
+                        )
+                    ]
+                )
+
+        reply_markup = InlineKeyboardMarkup(buttons)
+
+        # Store message reference for later editing
+        msg = await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+
+        # Store msg and metadata for callback handler
+        self._auq_messages: Dict[str, Dict[str, Any]] = getattr(
+            self, "_auq_messages", {}
+        )
+        self._auq_messages[tid_short] = {
+            "msg": msg,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "options": options,
+            "multi_select": multi_select,
+            "question_text": question_text,
+            "tool_use_id": tool_use_id,
+        }
+
+    async def _handle_auq_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle auq: callbacks — user answered AskUserQuestion."""
+        query = update.callback_query
+        data = query.data  # "auq:{tid_short}:{idx_or_confirm}"
+
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            await query.answer("Invalid callback data.", show_alert=True)
+            return
+
+        _, tid_short, action = parts
+
+        # Look up stored metadata
+        auq_meta = getattr(self, "_auq_messages", {}).get(tid_short)
+        if not auq_meta:
+            await query.answer("This question has expired.", show_alert=False)
+            return
+
+        # Only the original user can answer
+        if query.from_user.id != auq_meta["user_id"]:
+            await query.answer(
+                "Only the original user can answer this.", show_alert=True
+            )
+            return
+
+        tool_use_id = auq_meta["tool_use_id"]
+        future = self._pending_auq.get(tool_use_id)
+        if not future or future.done():
+            await query.answer("Already answered.", show_alert=False)
+            return
+
+        options = auq_meta["options"]
+        multi_select = auq_meta["multi_select"]
+
+        if multi_select:
+            # Toggle or confirm
+            if action == "confirm":
+                # Gather selected options
+                states = getattr(self, "_auq_multi_state", {}).get(
+                    tool_use_id, []
+                )
+                selected = [
+                    options[i].get("label", f"Option {i + 1}")
+                    for i in range(min(len(options), 4))
+                    if i < len(states) and states[i]
+                ]
+                if not selected:
+                    await query.answer(
+                        "请至少选择一个选项。", show_alert=True
+                    )
+                    return
+
+                # Resolve future
+                future.set_result({"selected": selected})
+
+                # Edit message
+                answer_str = ", ".join(selected)
+                try:
+                    await query.edit_message_text(
+                        f"✅ 你选择了：{answer_str}",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+                await query.answer()
+
+                # Cleanup
+                getattr(self, "_auq_multi_state", {}).pop(
+                    tool_use_id, None
+                )
+            else:
+                # Toggle a single option
+                idx = int(action)
+                if idx < 0 or idx >= min(len(options), 4):
+                    await query.answer("Invalid option.", show_alert=True)
+                    return
+
+                states = getattr(self, "_auq_multi_state", {}).get(
+                    tool_use_id, []
+                )
+                if idx < len(states):
+                    states[idx] = not states[idx]
+
+                # Rebuild keyboard with updated checkmarks
+                buttons: List[List[InlineKeyboardButton]] = []
+                row: List[InlineKeyboardButton] = []
+                for i, opt in enumerate(options[:4]):
+                    label = opt.get("label", f"Option {i + 1}")
+                    checked = (
+                        "☑" if i < len(states) and states[i] else "☐"
+                    )
+                    row.append(
+                        InlineKeyboardButton(
+                            f"{checked} {label}",
+                            callback_data=f"auq:{tid_short}:{i}",
+                        )
+                    )
+                    if len(row) == 2:
+                        buttons.append(row)
+                        row = []
+                if row:
+                    buttons.append(row)
+                buttons.append(
+                    [
+                        InlineKeyboardButton(
+                            "✅ 确认选择",
+                            callback_data=f"auq:{tid_short}:confirm",
+                        )
+                    ]
+                )
+
+                try:
+                    await query.edit_message_reply_markup(
+                        InlineKeyboardMarkup(buttons)
+                    )
+                except Exception:
+                    pass
+                await query.answer()
+        else:
+            # Single select — immediate answer
+            idx = int(action)
+            if idx < 0 or idx >= min(len(options), 4):
+                await query.answer("Invalid option.", show_alert=True)
+                return
+
+            selected_label = options[idx].get("label", f"Option {idx + 1}")
+            future.set_result({"selected": [selected_label]})
+
+            # Edit message to show result
+            try:
+                await query.edit_message_text(
+                    f"✅ 你选择了：{selected_label}",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            await query.answer()
 
     async def _agentic_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

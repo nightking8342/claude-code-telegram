@@ -279,6 +279,7 @@ class ClaudeSDKManager:
         stream_callback: Optional[Callable[[StreamUpdate], None]] = None,
         interrupt_event: Optional[asyncio.Event] = None,
         images: Optional[List[Dict[str, str]]] = None,
+        hooks: Optional[Dict[str, Any]] = None,
     ) -> ClaudeResponse:
         """Execute Claude Code command via SDK."""
         start_time = asyncio.get_event_loop().time()
@@ -367,6 +368,10 @@ class ClaudeSDKManager:
                     working_directory=working_directory,
                     approved_directory=self.config.approved_directory,
                 )
+
+            # Wire PreToolUse hooks (e.g. AskUserQuestion → Telegram buttons)
+            if hooks:
+                options.hooks = hooks
 
             # Resume previous session if we have a session_id
             if session_id and continue_session:
@@ -486,11 +491,17 @@ class ClaudeSDKManager:
 
                 # Note: asyncio.TimeoutError is intentionally NOT retried —
                 # it reflects a user-configured hard limit.
+                # When claude_timeout_seconds <= 0, skip the timeout wrapper
+                # so execution is bounded only by max_turns.
+                timeout = self.config.claude_timeout_seconds
                 try:
-                    await asyncio.wait_for(
-                        asyncio.shield(run_task),
-                        timeout=self.config.claude_timeout_seconds,
-                    )
+                    if timeout > 0:
+                        await asyncio.wait_for(
+                            asyncio.shield(run_task),
+                            timeout=timeout,
+                        )
+                    else:
+                        await run_task
                     break  # success — exit retry loop
                 except asyncio.CancelledError:
                     if not interrupted:

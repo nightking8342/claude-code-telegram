@@ -85,7 +85,8 @@ class Settings(BaseSettings):
         DEFAULT_CLAUDE_MAX_TURNS, description="Max conversation turns"
     )
     claude_timeout_seconds: int = Field(
-        DEFAULT_CLAUDE_TIMEOUT_SECONDS, description="Claude timeout"
+        DEFAULT_CLAUDE_TIMEOUT_SECONDS,
+        description="Claude timeout in seconds (0 or negative = no timeout, max_turns still applies)",
     )
     claude_max_cost_per_user: float = Field(
         DEFAULT_CLAUDE_MAX_COST_PER_USER, description="Max cost per user"
@@ -117,6 +118,7 @@ class Settings(BaseSettings):
             "TodoWrite",
             "WebSearch",
             "Skill",
+            "AskUserQuestion",
         ],
         description="List of allowed Claude tools",
     )
