@@ -1882,7 +1882,7 @@ class MessageOrchestrator:
         orchestrator_ref = self  # capture for closure
 
         async def _auq_hook(
-            hook_input: dict, stdin: Any = None, context: Any = None
+            hook_input: Any, stdin: Any = None, context: Any = None
         ) -> dict:
             tool_input = hook_input.get("tool_input", {})
             tool_use_id = hook_input.get("tool_use_id", "unknown")
