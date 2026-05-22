@@ -30,7 +30,7 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
     stops -> ``run_command()`` returns -> handler finishes -> lock released.
     """
 
-    _PRIORITY_PREFIXES = ("stop:",)
+    _PRIORITY_PREFIXES = ("stop:", "auq:")
 
     def __init__(self) -> None:
         # High limit so priority callbacks are never blocked by semaphore
