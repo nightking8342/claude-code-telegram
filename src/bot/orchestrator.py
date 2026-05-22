@@ -327,6 +327,8 @@ class MessageOrchestrator:
             ("status", self.agentic_status),
             ("verbose", self.agentic_verbose),
             ("repo", self.agentic_repo),
+            ("provider", self.agentic_provider),
+            ("model", self.agentic_model),
             ("restart", command.restart_command),
         ]
         if self.settings.enable_project_threads:
@@ -396,6 +398,14 @@ class MessageOrchestrator:
             )
         )
 
+        # Provider switch buttons
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_provider_callback),
+                pattern=r"^provider:",
+            )
+        )
+
         logger.info("Agentic handlers registered")
 
     def _register_classic_handlers(self, app: Application) -> None:
@@ -416,6 +426,8 @@ class MessageOrchestrator:
             ("export", command.export_session),
             ("actions", command.quick_actions),
             ("git", command.git_command),
+            ("provider", command.provider_command),
+            ("model", command.model_command),
             ("restart", command.restart_command),
         ]
         if self.settings.enable_project_threads:
@@ -445,6 +457,14 @@ class MessageOrchestrator:
             MessageHandler(filters.VOICE, self._inject_deps(message.handle_voice)),
             group=10,
         )
+        # Provider switch buttons (must be before general callback handler)
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(command.handle_provider_callback),
+                pattern=r"^provider:",
+            )
+        )
+
         app.add_handler(
             CallbackQueryHandler(self._inject_deps(callback.handle_callback_query))
         )
@@ -460,6 +480,8 @@ class MessageOrchestrator:
                 BotCommand("status", "Show session status"),
                 BotCommand("verbose", "Set output verbosity (0/1/2)"),
                 BotCommand("repo", "List repos / switch workspace"),
+                BotCommand("provider", "List/switch API providers"),
+                BotCommand("model", "Show/override model"),
                 BotCommand("restart", "Restart the bot"),
             ]
             if self.settings.enable_project_threads:
@@ -480,6 +502,8 @@ class MessageOrchestrator:
                 BotCommand("export", "Export current session"),
                 BotCommand("actions", "Show quick actions"),
                 BotCommand("git", "Git repository commands"),
+                BotCommand("provider", "List/switch API providers"),
+                BotCommand("model", "Show/override model"),
                 BotCommand("restart", "Restart the bot"),
             ]
             if self.settings.enable_project_threads:
@@ -552,6 +576,114 @@ class MessageOrchestrator:
 
         await update.message.reply_text("Session reset. What's next?")
 
+    def _build_provider_keyboard(
+        self, pm: Any
+    ) -> InlineKeyboardMarkup:
+        """Build inline keyboard for provider selection."""
+        profiles = pm.list_profiles()
+        active_name = pm.get_active_name() or ""
+        buttons = []
+        for p in profiles:
+            label = f"✅ {p.name}" if p.name == active_name else p.name
+            buttons.append(InlineKeyboardButton(label, callback_data=f"provider:{p.name}"))
+        return InlineKeyboardMarkup([buttons])  # one row
+
+    async def agentic_provider(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """List or switch API providers."""
+        pm = context.bot_data.get("provider_manager")
+        if not pm:
+            await update.message.reply_text("Provider manager not available.")
+            return
+
+        args = update.message.text.split()[1:] if update.message.text else []
+
+        if not args:
+            profiles = pm.list_profiles()
+            active_name = pm.get_active_name() or "none"
+            model = pm.get_effective_model() or "default"
+            lines = [f"<b>Provider:</b> {active_name}  ·  <b>Model:</b> {model}"]
+            for p in profiles:
+                marker = "➡️ " if p.name == active_name else "  "
+                lines.append(f"{marker}<code>{p.name}</code>")
+            text = "\n".join(lines)
+            keyboard = self._build_provider_keyboard(pm)
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+            return
+
+        # Switch to named profile via text arg
+        name = args[0].strip()
+        try:
+            profile = pm.switch_profile(name)
+            model = pm.get_effective_model() or "default"
+            await update.message.reply_text(
+                f"Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
+                f"Takes effect on next request.",
+                parse_mode="HTML",
+            )
+        except KeyError as e:
+            await update.message.reply_text(str(e))
+
+    async def _handle_provider_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle inline button press for provider switching."""
+        query = update.callback_query
+        await query.answer()
+
+        pm = context.bot_data.get("provider_manager")
+        if not pm:
+            await query.edit_message_text("Provider manager not available.")
+            return
+
+        data = query.data  # "provider:<name>"
+        name = data.split(":", 1)[1] if ":" in data else ""
+        try:
+            profile = pm.switch_profile(name)
+            model = pm.get_effective_model() or "default"
+            await query.edit_message_text(
+                f"✅ Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
+                f"Takes effect on next request.",
+                parse_mode="HTML",
+            )
+        except KeyError as e:
+            await query.edit_message_text(str(e))
+
+    async def agentic_model(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Show or override the model."""
+        pm = context.bot_data.get("provider_manager")
+        if not pm:
+            await update.message.reply_text("Provider manager not available.")
+            return
+
+        args = update.message.text.split()[1:] if update.message.text else []
+
+        if not args:
+            model = pm.get_effective_model() or "default"
+            source = pm.get_model_source()
+            await update.message.reply_text(
+                f"Model: <code>{model}</code> (from: {source})",
+                parse_mode="HTML",
+            )
+            return
+
+        value = args[0].strip()
+        if value.lower() == "reset":
+            pm.set_model_override(None)
+            model = pm.get_effective_model() or "default"
+            await update.message.reply_text(f"Model override cleared. Using: <code>{model}</code>", parse_mode="HTML")
+        else:
+            pm.set_model_override(value)
+            await update.message.reply_text(
+                f"Model override set: <code>{value}</code>\n"
+                f"Provider: {pm.get_active_name() or 'default'}\n"
+                f"Takes effect on next request.",
+                parse_mode="HTML",
+            )
+
     async def agentic_status(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -576,8 +708,16 @@ class MessageOrchestrator:
             except Exception:
                 pass
 
+        # Provider info
+        provider_str = ""
+        pm = context.bot_data.get("provider_manager")
+        if pm:
+            active_name = pm.get_active_name() or "default"
+            model = pm.get_effective_model() or "default"
+            provider_str = f" · Provider: {active_name} · Model: {model}"
+
         await update.message.reply_text(
-            f"📂 {dir_display} · Session: {session_status}{cost_str}"
+            f"📂 {dir_display} · Session: {session_status}{cost_str}{provider_str}"
         )
 
     def _get_verbose_level(self, context: ContextTypes.DEFAULT_TYPE) -> int:

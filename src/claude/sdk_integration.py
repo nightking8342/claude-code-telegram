@@ -245,10 +245,12 @@ class ClaudeSDKManager:
         self,
         config: Settings,
         security_validator: Optional[SecurityValidator] = None,
+        provider_manager: Optional[Any] = None,
     ):
         """Initialize SDK manager with configuration."""
         self.config = config
         self.security_validator = security_validator
+        self.provider_manager = provider_manager
 
         # Set up environment for Claude Code SDK if API key is provided
         # If no API key is provided, the SDK will use existing CLI authentication
@@ -289,6 +291,11 @@ class ClaudeSDKManager:
         )
 
         try:
+            # Apply provider profile environment overrides
+            saved_env: Dict[str, Optional[str]] = {}
+            if self.provider_manager:
+                saved_env = self.provider_manager.apply_to_environ()
+
             # Capture stderr from Claude CLI for better error diagnostics
             stderr_lines: List[str] = []
 
@@ -319,10 +326,16 @@ class ClaudeSDKManager:
                 sdk_allowed_tools = self.config.claude_allowed_tools
                 sdk_disallowed_tools = self.config.claude_disallowed_tools
 
+            # Resolve effective model (override > profile > config)
+            if self.provider_manager:
+                effective_model = self.provider_manager.get_effective_model() or None
+            else:
+                effective_model = self.config.claude_model or None
+
             # Build Claude Agent options
             options = ClaudeAgentOptions(
                 max_turns=self.config.claude_max_turns,
-                model=self.config.claude_model or None,
+                model=effective_model,
                 max_budget_usd=self.config.claude_max_cost_per_request,
                 cwd=str(working_directory),
                 allowed_tools=sdk_allowed_tools,
@@ -683,6 +696,11 @@ class ClaudeSDKManager:
                 error_type=type(e).__name__,
             )
             raise ClaudeProcessError(f"Unexpected error: {str(e)}")
+
+        finally:
+            # Restore environment after SDK call
+            if saved_env:
+                self.provider_manager.restore_environ(saved_env)
 
     async def _handle_stream_message(
         self, message: Message, stream_callback: Callable[[StreamUpdate], None]

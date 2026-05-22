@@ -1,0 +1,181 @@
+"""Runtime provider profile management for switching API endpoints and models."""
+
+import json
+import os
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import structlog
+
+logger = structlog.get_logger(__name__)
+
+_ENV_KEYS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL")
+
+
+@dataclass
+class ProviderProfile:
+    name: str
+    base_url: Optional[str] = None
+    auth_token: Optional[str] = None
+    api_key: Optional[str] = None
+    default_model: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProviderManager:
+    """Manages provider profiles and active selection at runtime.
+
+    Profiles are persisted in a JSON file. The active profile determines which
+    environment variables (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, etc.) are
+    injected before each Claude SDK subprocess call.
+    """
+
+    def __init__(
+        self,
+        config,
+        storage_path: Path = Path("data/providers.json"),
+    ):
+        self._config = config
+        self._storage_path = storage_path
+        self._profiles: Dict[str, ProviderProfile] = {}
+        self._active_name: Optional[str] = None
+        self._model_override: Optional[str] = None
+        self._load()
+
+    # ── Persistence ──────────────────────────────────────────────
+
+    def _load(self) -> None:
+        if self._storage_path.exists():
+            try:
+                data = json.loads(self._storage_path.read_text(encoding="utf-8"))
+                self._active_name = data.get("active")
+                self._model_override = data.get("model_override")
+                for name, pdata in data.get("profiles", {}).items():
+                    self._profiles[name] = ProviderProfile(**pdata)
+                logger.info(
+                    "Loaded provider profiles",
+                    count=len(self._profiles),
+                    active=self._active_name,
+                )
+                return
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.warning("Failed to parse providers.json, recreating", error=str(exc))
+
+        self._auto_create_default()
+
+    def _save(self) -> None:
+        self._storage_path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "active": self._active_name,
+            "model_override": self._model_override,
+            "profiles": {n: asdict(p) for n, p in self._profiles.items()},
+        }
+        self._storage_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.debug("Saved provider profiles", path=str(self._storage_path))
+
+    def _auto_create_default(self) -> None:
+        """Create initial default profile from current .env values."""
+        profile = ProviderProfile(
+            name="default",
+            base_url=os.environ.get("ANTHROPIC_BASE_URL"),
+            auth_token=os.environ.get("ANTHROPIC_AUTH_TOKEN"),
+            api_key=getattr(self._config, "anthropic_api_key_str", None),
+            default_model=getattr(self._config, "claude_model", None),
+            description="Auto-created from .env",
+        )
+        self._profiles["default"] = profile
+        self._active_name = "default"
+        self._save()
+        logger.info("Auto-created default provider profile from .env")
+
+    # ── Profile CRUD ─────────────────────────────────────────────
+
+    def list_profiles(self) -> List[ProviderProfile]:
+        return list(self._profiles.values())
+
+    def get_profile(self, name: str) -> Optional[ProviderProfile]:
+        return self._profiles.get(name)
+
+    # ── Active selection ─────────────────────────────────────────
+
+    def switch_profile(self, name: str) -> ProviderProfile:
+        if name not in self._profiles:
+            raise KeyError(f"Provider '{name}' not found. Available: {', '.join(self._profiles)}")
+        self._active_name = name
+        self._model_override = None  # clear override when switching provider
+        self._save()
+        logger.info("Switched provider", provider=name)
+        return self._profiles[name]
+
+    def get_active(self) -> Optional[ProviderProfile]:
+        if self._active_name:
+            return self._profiles.get(self._active_name)
+        return None
+
+    def get_active_name(self) -> Optional[str]:
+        return self._active_name
+
+    # ── Model override ───────────────────────────────────────────
+
+    def set_model_override(self, model: Optional[str]) -> None:
+        self._model_override = model
+        self._save()
+        if model:
+            logger.info("Model override set", model=model)
+        else:
+            logger.info("Model override cleared")
+
+    def get_effective_model(self) -> Optional[str]:
+        """Return the effective model: override > profile default > config default."""
+        if self._model_override:
+            return self._model_override
+        active = self.get_active()
+        if active and active.default_model:
+            return active.default_model
+        return getattr(self._config, "claude_model", None)
+
+    def get_model_source(self) -> str:
+        """Return where the effective model comes from."""
+        if self._model_override:
+            return "override"
+        active = self.get_active()
+        if active and active.default_model:
+            return "profile"
+        return "settings"
+
+    # ── Environment injection ────────────────────────────────────
+
+    def apply_to_environ(self) -> Dict[str, Optional[str]]:
+        """Temporarily set os.environ for the active profile.
+
+        Returns previous values for later restoration via restore_environ().
+        """
+        saved: Dict[str, Optional[str]] = {}
+        active = self.get_active()
+        if not active:
+            return saved
+
+        mapping = {
+            "ANTHROPIC_BASE_URL": active.base_url,
+            "ANTHROPIC_AUTH_TOKEN": active.auth_token,
+            "ANTHROPIC_API_KEY": active.api_key,
+            "ANTHROPIC_MODEL": self.get_effective_model(),
+        }
+        for key, value in mapping.items():
+            saved[key] = os.environ.get(key)
+            if value is not None:
+                os.environ[key] = value
+            elif key in os.environ and value is None and saved[key] is not None:
+                # Only delete if the profile explicitly has None and env had a value
+                pass  # keep existing env var to avoid breaking default config
+
+        return saved
+
+    def restore_environ(self, saved: Dict[str, Optional[str]]) -> None:
+        """Restore os.environ to previous state."""
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value

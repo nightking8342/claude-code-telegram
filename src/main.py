@@ -2,9 +2,11 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import signal
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -18,6 +20,7 @@ from src.claude import (
 )
 from src.claude.sdk_integration import ClaudeSDKManager
 from src.config.features import FeatureFlags
+from src.config.providers import ProviderManager
 from src.config.settings import Settings
 from src.events.bus import EventBus
 from src.events.handlers import AgentHandler
@@ -140,14 +143,20 @@ async def create_application(config: Settings) -> Dict[str, Any]:
     session_storage = SQLiteSessionStorage(storage.db_manager)
     session_manager = SessionManager(config, session_storage)
 
+    # Create provider manager for runtime provider/model switching
+    provider_manager = ProviderManager(config)
+
     # Create Claude SDK manager and integration facade
     logger.info("Using Claude Python SDK integration")
-    sdk_manager = ClaudeSDKManager(config, security_validator=security_validator)
+    sdk_manager = ClaudeSDKManager(
+        config, security_validator=security_validator, provider_manager=provider_manager
+    )
 
     claude_integration = ClaudeIntegration(
         config=config,
         sdk_manager=sdk_manager,
         session_manager=session_manager,
+        provider_manager=provider_manager,
     )
 
     # --- Event bus and agentic platform components ---
@@ -179,6 +188,7 @@ async def create_application(config: Settings) -> Dict[str, Any]:
         "claude_integration": claude_integration,
         "storage": storage,
         "event_bus": event_bus,
+        "provider_manager": provider_manager,
         "project_registry": None,
         "project_threads_manager": None,
     }
@@ -288,6 +298,39 @@ async def run_application(app: Dict[str, Any]) -> None:
         )
         notification_service.register()
         await notification_service.start()
+
+        # Check for restart marker and send "restart complete" message
+        marker_path = Path.home() / ".claude-tg-bot" / "restart_marker.json"
+        if marker_path.exists():
+            try:
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+                age = (
+                    datetime.now(UTC)
+                    - datetime.fromisoformat(marker["timestamp"])
+                ).total_seconds()
+                if age < 300:  # only if marker is < 5 minutes old
+                    await telegram_bot.send_message(
+                        chat_id=marker["chat_id"],
+                        text=(
+                            "✅ <b>Restart complete.</b>\n\n"
+                            "Bot is back online."
+                        ),
+                        parse_mode="HTML",
+                    )
+                    logger.info(
+                        "Sent restart-complete notification",
+                        chat_id=marker["chat_id"],
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to send restart-complete notification",
+                    error=str(exc),
+                )
+            finally:
+                try:
+                    marker_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         # Collect concurrent tasks
         tasks = []

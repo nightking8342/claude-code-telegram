@@ -24,10 +24,13 @@ class ClaudeIntegration:
         config: Settings,
         sdk_manager: Optional[ClaudeSDKManager] = None,
         session_manager: Optional[SessionManager] = None,
+        provider_manager: Optional[Any] = None,
     ):
         """Initialize Claude integration facade."""
         self.config = config
-        self.sdk_manager = sdk_manager or ClaudeSDKManager(config)
+        self.sdk_manager = sdk_manager or ClaudeSDKManager(
+            config, provider_manager=provider_manager
+        )
         self.session_manager = session_manager
 
     async def run_command(

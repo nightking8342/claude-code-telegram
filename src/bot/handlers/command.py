@@ -1,9 +1,10 @@
 """Command handlers for bot operations."""
 
+import json
 import os
 import signal
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -1103,7 +1104,7 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         # Get context-aware actions
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         actions = await quick_action_manager.get_suggestions(
             session=SessionModel(
                 session_id="",  # ephemeral session for quick actions context
@@ -1233,6 +1234,109 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.error("Error in git_command", error=str(e), user_id=user_id)
 
 
+def _build_provider_keyboard(pm) -> InlineKeyboardMarkup:
+    """Build inline keyboard for provider selection."""
+    profiles = pm.list_profiles()
+    active_name = pm.get_active_name() or ""
+    buttons = []
+    for p in profiles:
+        label = f"✅ {p.name}" if p.name == active_name else p.name
+        buttons.append(InlineKeyboardButton(label, callback_data=f"provider:{p.name}"))
+    return InlineKeyboardMarkup([buttons])
+
+
+async def provider_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /provider command — list or switch API providers."""
+    pm = context.bot_data.get("provider_manager")
+    if not pm:
+        await update.message.reply_text("Provider manager not available.")
+        return
+
+    args = update.message.text.split()[1:] if update.message.text else []
+
+    if not args:
+        profiles = pm.list_profiles()
+        active_name = pm.get_active_name() or "none"
+        model = pm.get_effective_model() or "default"
+        lines = [f"<b>Provider:</b> {active_name}  ·  <b>Model:</b> {model}"]
+        for p in profiles:
+            marker = "➡️ " if p.name == active_name else "  "
+            lines.append(f"{marker}<code>{p.name}</code>")
+        text = "\n".join(lines)
+        keyboard = _build_provider_keyboard(pm)
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        return
+
+    name = args[0].strip()
+    try:
+        profile = pm.switch_profile(name)
+        model = pm.get_effective_model() or "default"
+        await update.message.reply_text(
+            f"Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
+            f"Takes effect on next request.",
+            parse_mode="HTML",
+        )
+    except KeyError as e:
+        await update.message.reply_text(str(e))
+
+
+async def handle_provider_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline button press for provider switching (classic mode)."""
+    query = update.callback_query
+    await query.answer()
+
+    pm = context.bot_data.get("provider_manager")
+    if not pm:
+        await query.edit_message_text("Provider manager not available.")
+        return
+
+    data = query.data  # "provider:<name>"
+    name = data.split(":", 1)[1] if ":" in data else ""
+    try:
+        profile = pm.switch_profile(name)
+        model = pm.get_effective_model() or "default"
+        await query.edit_message_text(
+            f"✅ Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
+            f"Takes effect on next request.",
+            parse_mode="HTML",
+        )
+    except KeyError as e:
+        await query.edit_message_text(str(e))
+
+
+async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /model command — show or override the model."""
+    pm = context.bot_data.get("provider_manager")
+    if not pm:
+        await update.message.reply_text("Provider manager not available.")
+        return
+
+    args = update.message.text.split()[1:] if update.message.text else []
+
+    if not args:
+        model = pm.get_effective_model() or "default"
+        source = pm.get_model_source()
+        await update.message.reply_text(
+            f"Model: <code>{model}</code> (from: {source})",
+            parse_mode="HTML",
+        )
+        return
+
+    value = args[0].strip()
+    if value.lower() == "reset":
+        pm.set_model_override(None)
+        model = pm.get_effective_model() or "default"
+        await update.message.reply_text(f"Model override cleared. Using: <code>{model}</code>", parse_mode="HTML")
+    else:
+        pm.set_model_override(value)
+        await update.message.reply_text(
+            f"Model override set: <code>{value}</code>\n"
+            f"Provider: {pm.get_active_name() or 'default'}\n"
+            f"Takes effect on next request.",
+            parse_mode="HTML",
+        )
+
+
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /restart command - gracefully restart the bot process.
 
@@ -1256,17 +1360,28 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     logger.info("Restart requested via /restart command", user_id=user_id)
 
+    # Write a marker file so the new process can send a "restart complete" message.
+    marker = {
+        "chat_id": update.effective_chat.id,
+        "user_id": user_id,
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    marker_path = Path.home() / ".claude-tg-bot" / "restart_marker.json"
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(
+        json.dumps(marker, ensure_ascii=False), encoding="utf-8"
+    )
+
     if sys.platform == "win32":
         # Windows: no systemd, so re-launch ourselves then exit.
-        # uv tool installs use a launcher exe at Scripts/ or ~/.local/bin/;
-        # sys.executable is the Python interpreter, not the bot binary.
-        import shutil
+        # Use the VBS wrapper (same as Scheduled Task) so the new process
+        # runs with a hidden window and stdout redirected to bot.log.
         import subprocess
-        bot_exe = shutil.which("claude-telegram-bot")
-        if bot_exe:
+        vbs_path = Path.home() / ".claude-tg-bot" / "start-bot.vbs"
+        if vbs_path.exists():
             subprocess.Popen(
-                [bot_exe],
-                cwd=os.getcwd(),
+                ["wscript.exe", str(vbs_path)],
+                cwd=str(Path.home() / ".claude-tg-bot"),
                 close_fds=True,
                 creationflags=subprocess.DETACHED_PROCESS
                 | subprocess.CREATE_NEW_PROCESS_GROUP,
