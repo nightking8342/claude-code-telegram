@@ -2,6 +2,7 @@
 
 import os
 import signal
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -1255,9 +1256,26 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     logger.info("Restart requested via /restart command", user_id=user_id)
 
-    # SIGTERM triggers the existing graceful-shutdown handler in main.py;
-    # systemd Restart=always will bring the process back up.
-    os.kill(os.getpid(), signal.SIGTERM)
+    if sys.platform == "win32":
+        # Windows: no systemd, so re-launch ourselves then exit.
+        # uv tool installs use a launcher exe at Scripts/ or ~/.local/bin/;
+        # sys.executable is the Python interpreter, not the bot binary.
+        import shutil
+        import subprocess
+        bot_exe = shutil.which("claude-telegram-bot")
+        if bot_exe:
+            subprocess.Popen(
+                [bot_exe],
+                cwd=os.getcwd(),
+                close_fds=True,
+                creationflags=subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        os._exit(0)
+    else:
+        # SIGTERM triggers the existing graceful-shutdown handler in main.py;
+        # systemd Restart=always will bring the process back up.
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 def _format_file_size(size: int) -> str:
