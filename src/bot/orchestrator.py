@@ -136,6 +136,8 @@ class MessageOrchestrator:
         self._active_requests: Dict[int, ActiveRequest] = {}
         self._pending_auq: Dict[str, asyncio.Future] = {}
         # user_id -> {"tool_use_id": str, "tid_short": str, "question_text": str}
+        # Metadata for "Other" free-text answers; the lock-bypass state lives
+        # in StopAwareUpdateProcessor.auq_other_waiting (class-level set).
         self._auq_waiting_other: Dict[int, Dict[str, str]] = {}
         self._known_commands: frozenset[str] = frozenset()
 
@@ -1073,6 +1075,11 @@ class MessageOrchestrator:
         # Check if user is answering an "Other" question from AskUserQuestion
         waiting = self._auq_waiting_other.pop(user_id, None)
         if waiting:
+            # Remove from update processor's bypass set
+            from .update_processor import StopAwareUpdateProcessor
+
+            StopAwareUpdateProcessor.auq_other_waiting.discard(user_id)
+
             tool_use_id = waiting["tool_use_id"]
             future = self._pending_auq.get(tool_use_id)
             if future and not future.done():
@@ -2159,6 +2166,11 @@ class MessageOrchestrator:
                 "tid_short": tid_short,
                 "question_text": auq_meta["question_text"],
             }
+            # Also register in the update processor so the text reply
+            # bypasses the sequential lock (avoids deadlock with Claude hook).
+            from .update_processor import StopAwareUpdateProcessor
+
+            StopAwareUpdateProcessor.auq_other_waiting.add(query.from_user.id)
             # Edit message to prompt for text input
             try:
                 await query.edit_message_text(

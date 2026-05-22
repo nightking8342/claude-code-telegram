@@ -1,12 +1,13 @@
 """Selective-concurrency update processor for PTB.
 
 Regular updates (messages, commands) process sequentially -- one at a time.
-Priority callbacks (stop:*) bypass the queue and run immediately so they can
-interrupt the currently-running handler.
+Priority callbacks (stop:*, auq:*) bypass the queue and run immediately so
+they can interrupt the currently-running handler or resolve an
+AskUserQuestion hook Future.
 """
 
 import asyncio
-from typing import Any, Awaitable
+from typing import Any, Awaitable, Set
 
 from telegram import Update
 from telegram.ext._baseupdateprocessor import BaseUpdateProcessor
@@ -19,18 +20,22 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
     The base class holds a semaphore (max 256) then calls our
     ``do_process_update()``.
 
-    For priority callbacks (``stop:*``): we just ``await coroutine`` -- runs
-    immediately.
+    For priority callbacks (``stop:*``, ``auq:*``): we just ``await coroutine``
+    -- runs immediately.
+    For text messages from users in ``auq_other_waiting``: also bypass the lock
+    so the answer can resolve the hook Future while Claude is still running.
     For everything else: we acquire ``_sequential_lock`` first -- only one
     runs at a time.
-
-    A stop callback arrives while a text handler holds the lock -> stop
-    callback runs concurrently -> fires the ``asyncio.Event`` -> the watcher
-    task inside ``execute_command()`` calls ``client.interrupt()`` -> Claude
-    stops -> ``run_command()`` returns -> handler finishes -> lock released.
     """
 
     _PRIORITY_PREFIXES = ("stop:", "auq:")
+
+    # User IDs currently waiting for free-text "Other" answer.
+    # Populated by the orchestrator's ``_handle_auq_callback`` when the user
+    # clicks the "Other" button; consumed by ``agentic_text`` to resolve
+    # the hook Future.  Using a class-level set so the orchestrator and
+    # processor share state without a circular import.
+    auq_other_waiting: Set[int] = set()
 
     def __init__(self) -> None:
         # High limit so priority callbacks are never blocked by semaphore
@@ -49,13 +54,28 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
             and cb.data.startswith(cls._PRIORITY_PREFIXES)
         )
 
+    @classmethod
+    def _is_auq_other_reply(cls, update: object) -> bool:
+        """Return True if this is a text reply to an 'Other' question."""
+        if not isinstance(update, Update):
+            return False
+        msg = update.effective_message
+        user = update.effective_user
+        if msg is None or user is None:
+            return False
+        return (
+            hasattr(msg, "text")
+            and msg.text is not None
+            and user.id in cls.auq_other_waiting
+        )
+
     async def do_process_update(
         self,
         update: object,
         coroutine: Awaitable[Any],
     ) -> None:
         """Process an update, applying sequential lock for non-priority updates."""
-        if self._is_priority_callback(update):
+        if self._is_priority_callback(update) or self._is_auq_other_reply(update):
             # Run immediately -- no sequential lock
             await coroutine
         else:
