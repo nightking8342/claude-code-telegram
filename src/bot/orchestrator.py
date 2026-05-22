@@ -135,6 +135,8 @@ class MessageOrchestrator:
         self.deps = deps
         self._active_requests: Dict[int, ActiveRequest] = {}
         self._pending_auq: Dict[str, asyncio.Future] = {}
+        # user_id -> {"tool_use_id": str, "tid_short": str, "question_text": str}
+        self._auq_waiting_other: Dict[int, Dict[str, str]] = {}
         self._known_commands: frozenset[str] = frozenset()
 
     def _inject_deps(self, handler: Callable) -> Callable:  # type: ignore[type-arg]
@@ -1067,6 +1069,27 @@ class MessageOrchestrator:
         """Direct Claude passthrough. Simple progress. No suggestions."""
         user_id = update.effective_user.id
         message_text = update.message.text
+
+        # Check if user is answering an "Other" question from AskUserQuestion
+        waiting = self._auq_waiting_other.pop(user_id, None)
+        if waiting:
+            tool_use_id = waiting["tool_use_id"]
+            future = self._pending_auq.get(tool_use_id)
+            if future and not future.done():
+                future.set_result({"selected": [message_text]})
+                # Edit the prompt message to show the answer
+                tid_short = waiting["tid_short"]
+                auq_meta = getattr(self, "_auq_messages", {}).get(tid_short)
+                if auq_meta:
+                    try:
+                        await auq_meta["msg"].edit_text(
+                            f"✅ 你输入了：{escape_html(message_text)}",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                await update.message.reply_text("✅ 已收到你的回答，Claude 继续处理中...")
+            return
 
         logger.info(
             "Agentic text message",
@@ -2058,6 +2081,15 @@ class MessageOrchestrator:
                         )
                     ]
                 )
+            # "Other" button for free-text input
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        "📝 其他（自由输入）",
+                        callback_data=f"auq:{tid_short}:other",
+                    )
+                ]
+            )
 
         reply_markup = InlineKeyboardMarkup(buttons)
 
@@ -2118,6 +2150,25 @@ class MessageOrchestrator:
 
         options = auq_meta["options"]
         multi_select = auq_meta["multi_select"]
+
+        # "Other" free-text input
+        if action == "other":
+            # Mark user as waiting for free-text input
+            self._auq_waiting_other[query.from_user.id] = {
+                "tool_use_id": tool_use_id,
+                "tid_short": tid_short,
+                "question_text": auq_meta["question_text"],
+            }
+            # Edit message to prompt for text input
+            try:
+                await query.edit_message_text(
+                    "📝 请输入你的回答（直接发送文字即可）：",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            await query.answer()
+            return
 
         if multi_select:
             # Toggle or confirm
