@@ -1877,6 +1877,8 @@ class MessageOrchestrator:
         Returns a dict suitable for passing as ``hooks`` to
         ``ClaudeIntegration.run_command()``.
         """
+        from claude_agent_sdk import HookMatcher  # type: ignore[import-untyped]
+
         orchestrator_ref = self  # capture for closure
 
         async def _auq_hook(
@@ -1981,10 +1983,7 @@ class MessageOrchestrator:
 
         return {
             "PreToolUse": [
-                {
-                    "matcher": "AskUserQuestion",
-                    "hooks": [_auq_hook],
-                }
+                HookMatcher(matcher="AskUserQuestion", hooks=[_auq_hook])
             ]
         }
 
