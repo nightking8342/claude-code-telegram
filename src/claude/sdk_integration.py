@@ -59,6 +59,7 @@ class ClaudeResponse:
     error_type: Optional[str] = None
     tools_used: List[Dict[str, Any]] = field(default_factory=list)
     interrupted: bool = False
+    usage: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -491,8 +492,11 @@ class ClaudeSDKManager:
 
                 # Note: asyncio.TimeoutError is intentionally NOT retried —
                 # it reflects a user-configured hard limit.
-                # When claude_timeout_seconds <= 0, skip the timeout wrapper
-                # so execution is bounded only by max_turns.
+                # When claude_timeout_seconds <= 0, use a safety cap of 30
+                # minutes so a hung subprocess never blocks the event loop
+                # and its lock forever.  max_turns still applies as the
+                # primary bound; this is only a backstop.
+                _SAFETY_TIMEOUT = 1800  # 30 minutes
                 timeout = self.config.claude_timeout_seconds
                 try:
                     if timeout > 0:
@@ -501,7 +505,10 @@ class ClaudeSDKManager:
                             timeout=timeout,
                         )
                     else:
-                        await run_task
+                        await asyncio.wait_for(
+                            asyncio.shield(run_task),
+                            timeout=_SAFETY_TIMEOUT,
+                        )
                     break  # success — exit retry loop
                 except asyncio.CancelledError:
                     if not interrupted:
@@ -541,11 +548,15 @@ class ClaudeSDKManager:
             tools_used: List[Dict[str, Any]] = []
             claude_session_id = None
             result_content = None
+            usage: Optional[Dict[str, Any]] = None
             for message in messages:
                 if isinstance(message, ResultMessage):
                     cost = getattr(message, "total_cost_usd", 0.0) or 0.0
                     claude_session_id = getattr(message, "session_id", None)
                     result_content = getattr(message, "result", None)
+                    raw_usage = getattr(message, "usage", None)
+                    if isinstance(raw_usage, dict):
+                        usage = raw_usage
                     current_time = asyncio.get_event_loop().time()
                     for msg in messages:
                         if isinstance(msg, AssistantMessage):
@@ -630,6 +641,7 @@ class ClaudeSDKManager:
                 ),
                 tools_used=tools_used,
                 interrupted=interrupted,
+                usage=usage,
             )
 
         except asyncio.TimeoutError:
