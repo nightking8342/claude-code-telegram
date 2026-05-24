@@ -1545,6 +1545,41 @@ async def handle_sessions_callback(
             )
         return
 
+    if sub_action == "resume":
+        session_id = rest
+        ownership = await _check_session_ownership(storage, user_id, session_id)
+        if ownership == "cross_user":
+            await query.answer("无权访问该 session", show_alert=True)
+            if audit_logger:
+                await audit_logger.log_event(
+                    user_id=user_id,
+                    event_type="sessions_cross_user_denied",
+                    event_data={"session_id": session_id, "action": "resume"},
+                    success=False,
+                )
+            return
+        if ownership == "missing":
+            await query.answer("session 不存在或已删除")
+            return
+
+        title = await _resolve_title_for_handler(
+            storage, current_directory, session_id
+        )
+        context.user_data["claude_session_id"] = session_id
+        context.user_data["force_new_session"] = False
+        await query.message.reply_text(
+            f"✅ 已切到 session «<b>{escape_html(title)}</b>»，发消息即继续。",
+            parse_mode="HTML",
+        )
+        if audit_logger:
+            await audit_logger.log_event(
+                user_id=user_id,
+                event_type="sessions_resume",
+                event_data={"session_id": session_id},
+                success=True,
+            )
+        return
+
     await query.edit_message_text(
         "❌ <b>未知的 session 动作</b>", parse_mode="HTML"
     )

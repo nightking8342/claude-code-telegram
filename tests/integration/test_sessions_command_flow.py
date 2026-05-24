@@ -252,3 +252,35 @@ class TestViewHtmlCallback:
             await handle_sessions_callback(query, "view:fail-view", context)
         query.message.reply_text.assert_called_once()
         assert "失败" in query.message.reply_text.call_args.args[0]
+
+
+class TestResumeCallback:
+    @pytest.mark.asyncio
+    async def test_resume_sets_user_data(self, storage):
+        await _save(storage, 42, PROJ, "resume-test-sid")
+        query = _fake_query(42, "sessions:resume:resume-test-sid")
+        context = _fake_context(storage, 42)
+        with patch(
+            "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="Resume me",
+        ):
+            await handle_sessions_callback(query, "resume:resume-test-sid", context)
+        assert context.user_data["claude_session_id"] == "resume-test-sid"
+        assert context.user_data["force_new_session"] is False
+        query.message.reply_text.assert_called_once()
+        assert "Resume me" in query.message.reply_text.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_resume_cross_user_denied(self, storage):
+        await _save(storage, 99, PROJ, "victim-resume")
+        query = _fake_query(42, "sessions:resume:victim-resume")
+        context = _fake_context(storage, 42)
+        await handle_sessions_callback(query, "resume:victim-resume", context)
+        assert context.user_data.get("claude_session_id") is None
+        query.answer.assert_called()
+        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        assert any(
+            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            for c in audit_calls
+        )
