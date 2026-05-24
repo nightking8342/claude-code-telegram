@@ -20,7 +20,9 @@ class TestDeriveFallbackTitle:
         assert result == "Help me debug this webhook"
 
     def test_strips_command_message_wrapper(self):
-        raw = "<command-message>init</command-message><command-name>/init</command-name>"
+        raw = (
+            "<command-message>init</command-message><command-name>/init</command-name>"
+        )
         result = derive_fallback_title(raw, "id1id2id3id")
         assert result == "Session id1id2id"
 
@@ -82,14 +84,17 @@ class TestListSessionsView:
         storage.get_user_sessions = AsyncMock(
             return_value=[_fake_session(f"s{i}") for i in range(3)]
         )
-        with patch(
-            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
-            new_callable=AsyncMock,
-            return_value=None,
-        ), patch(
-            "src.bot.features.session_browser._first_prompt_for",
-            new_callable=AsyncMock,
-            return_value="hello",
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.bot.features.session_browser._first_prompt_for",
+                new_callable=AsyncMock,
+                return_value="hello",
+            ),
         ):
             text, kb = await list_sessions_view(
                 storage=storage, user_id=42, project_path="/proj", page=0
@@ -186,8 +191,7 @@ class TestListSessionsView:
         # Real-shaped UUID session ids
         storage.get_user_sessions = AsyncMock(
             return_value=[
-                _fake_session("04e2d0f2-095e-4ed7-b429-66c21569830b")
-                for _ in range(10)
+                _fake_session("04e2d0f2-095e-4ed7-b429-66c21569830b") for _ in range(10)
             ]
         )
         with patch(
@@ -207,9 +211,7 @@ class TestSessionDetailView:
     @pytest.mark.asyncio
     async def test_renders_metadata_and_three_action_buttons(self):
         storage = AsyncMock()
-        storage.load_session = AsyncMock(
-            return_value=_fake_session("abc-123", msgs=23)
-        )
+        storage.load_session = AsyncMock(return_value=_fake_session("abc-123", msgs=23))
         with patch(
             "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
             new_callable=AsyncMock,
@@ -236,14 +238,17 @@ class TestSessionDetailView:
     async def test_back_button_carries_page_number(self):
         storage = AsyncMock()
         storage.load_session = AsyncMock(return_value=_fake_session("abc-123"))
-        with patch(
-            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
-            new_callable=AsyncMock,
-            return_value=None,
-        ), patch(
-            "src.bot.features.session_browser._first_prompt_for",
-            new_callable=AsyncMock,
-            return_value="hi",
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.bot.features.session_browser._first_prompt_for",
+                new_callable=AsyncMock,
+                return_value="hi",
+            ),
         ):
             _, kb = await session_detail_view(
                 storage=storage,
@@ -266,4 +271,3 @@ class TestSessionDetailView:
             back_page=0,
         )
         assert result is None
-

@@ -83,9 +83,7 @@ class TestCount:
     @pytest.mark.asyncio
     async def test_count_returns_total(self, storage):
         for i in range(7):
-            await storage.save_session(
-                _make_session(1, "/proj", f"s{i}", age_min=i)
-            )
+            await storage.save_session(_make_session(1, "/proj", f"s{i}", age_min=i))
         assert await storage.count_user_sessions(1, project_path=_norm("/proj")) == 7
 
     @pytest.mark.asyncio

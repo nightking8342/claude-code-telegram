@@ -12,7 +12,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.claude.facade import ClaudeIntegration
 
-
 _COMMAND_WRAPPER_RE = re.compile(
     r"<command-(message|name)>.*?</command-\1>",
     flags=re.DOTALL | re.IGNORECASE,
@@ -63,9 +62,7 @@ def _truncate(s: str, n: int) -> str:
 
 def escape_path(path: str) -> str:
     """Escape minimal HTML chars for path display."""
-    return (
-        path.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    )
+    return path.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 async def _first_prompt_for(storage: Any, session_id: str) -> Optional[str]:
@@ -86,13 +83,9 @@ async def _first_prompt_for(storage: Any, session_id: str) -> Optional[str]:
     return getattr(first, "prompt", None) or getattr(first, "content", None)
 
 
-async def _resolve_title(
-    storage: Any, project_path: str, session_id: str
-) -> str:
+async def _resolve_title(storage: Any, project_path: str, session_id: str) -> str:
     """Resolve display title: CLI aiTitle -> first prompt -> session id-based."""
-    title = await ClaudeIntegration.read_session_title(
-        session_id, Path(project_path)
-    )
+    title = await ClaudeIntegration.read_session_title(session_id, Path(project_path))
     if title:
         return title
     first_prompt = await _first_prompt_for(storage, session_id)
@@ -146,15 +139,11 @@ async def list_sessions_view(
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(
-            InlineKeyboardButton(
-                "← 上一页", callback_data=f"sessions:list:{page - 1}"
-            )
+            InlineKeyboardButton("← 上一页", callback_data=f"sessions:list:{page - 1}")
         )
     if page < total_pages - 1:
         nav.append(
-            InlineKeyboardButton(
-                "下一页 →", callback_data=f"sessions:list:{page + 1}"
-            )
+            InlineKeyboardButton("下一页 →", callback_data=f"sessions:list:{page + 1}")
         )
     if nav:
         rows.append(nav)

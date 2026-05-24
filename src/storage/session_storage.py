@@ -221,10 +221,7 @@ class SQLiteSessionStorage(SessionStorage):
         self, user_id: int, project_path: Optional[str] = None
     ) -> int:
         """Count active sessions for a user, optionally scoped to one project."""
-        sql = (
-            "SELECT COUNT(*) FROM sessions "
-            "WHERE user_id = ? AND is_active = TRUE"
-        )
+        sql = "SELECT COUNT(*) FROM sessions " "WHERE user_id = ? AND is_active = TRUE"
         params: list = [user_id]
         if project_path is not None:
             sql += " AND project_path = ?"

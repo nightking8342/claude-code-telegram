@@ -327,9 +327,7 @@ async def new_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     cleared_info = ""
     if old_session_id:
-        cleared_info = (
-            f"\n🗑️ Previous session <code>{old_session_id}</code> cleared."
-        )
+        cleared_info = f"\n🗑️ Previous session <code>{old_session_id}</code> cleared."
 
     keyboard = [
         [
@@ -1280,7 +1278,9 @@ async def provider_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(str(e))
 
 
-async def handle_provider_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_provider_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handle inline button press for provider switching (classic mode)."""
     query = update.callback_query
     await query.answer()
@@ -1374,9 +1374,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-async def sessions_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """`/sessions` — list current-directory sessions in a paginated browser.
 
     Classic-mode entry point. Same logic also bound in orchestrator for
@@ -1439,15 +1437,14 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     }
     marker_path = Path.home() / ".claude-tg-bot" / "restart_marker.json"
     marker_path.parent.mkdir(parents=True, exist_ok=True)
-    marker_path.write_text(
-        json.dumps(marker, ensure_ascii=False), encoding="utf-8"
-    )
+    marker_path.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")
 
     if sys.platform == "win32":
         # Windows: no systemd, so re-launch ourselves then exit.
         # Use the VBS wrapper (same as Scheduled Task) so the new process
         # runs with a hidden window and stdout redirected to bot.log.
         import subprocess
+
         vbs_path = Path.home() / ".claude-tg-bot" / "start-bot.vbs"
         if vbs_path.exists():
             subprocess.Popen(

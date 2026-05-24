@@ -15,7 +15,6 @@ from ...security.audit import AuditLogger
 from ...security.validators import SecurityValidator
 from ...storage.session_storage import SQLiteSessionStorage
 from ..features.session_browser import (
-    PAGE_SIZE,
     derive_fallback_title,
     list_sessions_view,
     session_detail_view,
@@ -38,9 +37,7 @@ def _safe_filename_fragment(s: str, max_len: int = 40) -> str:
     return cleaned[:max_len] or "session"
 
 
-async def _check_session_ownership(
-    storage, user_id: int, session_id: str
-) -> str:
+async def _check_session_ownership(storage, user_id: int, session_id: str) -> str:
     """Return one of: ``"owned"``, ``"cross_user"``, ``"missing"``."""
     session = await storage.load_session(session_id, user_id)
     if session is not None:
@@ -56,9 +53,7 @@ async def _check_session_ownership(
     return "missing"
 
 
-async def _resolve_title_for_handler(
-    storage, project_path, session_id: str
-) -> str:
+async def _resolve_title_for_handler(storage, project_path, session_id: str) -> str:
     """Local mirror of ``session_browser._resolve_title`` for the callback layer.
 
     Resolves display title: CLI aiTitle → first prompt → session id-based.
@@ -76,8 +71,7 @@ async def _resolve_title_for_handler(
             first_prompt = (
                 first.get("prompt") or first.get("content")
                 if isinstance(first, dict)
-                else getattr(first, "prompt", None)
-                or getattr(first, "content", None)
+                else getattr(first, "prompt", None) or getattr(first, "content", None)
             )
     except Exception:
         pass
@@ -1467,9 +1461,7 @@ async def handle_sessions_callback(
                 project_path=str(current_directory),
                 page=0,
             )
-            await query.edit_message_text(
-                text, reply_markup=kb, parse_mode="HTML"
-            )
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
             return
 
         text, kb = result
@@ -1524,9 +1516,7 @@ async def handle_sessions_callback(
             )
             return
 
-        title = await _resolve_title_for_handler(
-            storage, current_directory, session_id
-        )
+        title = await _resolve_title_for_handler(storage, current_directory, session_id)
         date_str = datetime.now(UTC).strftime("%Y%m%d")
         filename = f"{_safe_filename_fragment(title)}_{date_str}.html"
 
@@ -1562,9 +1552,7 @@ async def handle_sessions_callback(
             await query.answer("session 不存在或已删除")
             return
 
-        title = await _resolve_title_for_handler(
-            storage, current_directory, session_id
-        )
+        title = await _resolve_title_for_handler(storage, current_directory, session_id)
         context.user_data["claude_session_id"] = session_id
         context.user_data["force_new_session"] = False
         await query.message.reply_text(
@@ -1662,9 +1650,7 @@ async def handle_sessions_callback(
             )
             return
 
-        title = await _resolve_title_for_handler(
-            storage, current_directory, session_id
-        )
+        title = await _resolve_title_for_handler(storage, current_directory, session_id)
         date_str = datetime.now(UTC).strftime("%Y%m%d")
         filename = f"{_safe_filename_fragment(title)}_{date_str}.{fmt}"
         await query.message.reply_document(
@@ -1682,6 +1668,4 @@ async def handle_sessions_callback(
             )
         return
 
-    await query.edit_message_text(
-        "❌ <b>未知的 session 动作</b>", parse_mode="HTML"
-    )
+    await query.edit_message_text("❌ <b>未知的 session 动作</b>", parse_mode="HTML")

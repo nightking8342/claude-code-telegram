@@ -158,9 +158,7 @@ class TestDetailCallback:
             new_callable=AsyncMock,
             return_value="Hello world",
         ):
-            await handle_sessions_callback(
-                query, "detail:my-session-id", context
-            )
+            await handle_sessions_callback(query, "detail:my-session-id", context)
         query.edit_message_text.assert_called_once()
         text = query.edit_message_text.call_args.args[0]
         assert "Hello world" in text
@@ -185,9 +183,7 @@ class TestDetailCallback:
     async def test_detail_nonexistent_session(self, storage):
         query = _fake_query(42, "sessions:detail:does-not-exist")
         context = _fake_context(storage, 42)
-        await handle_sessions_callback(
-            query, "detail:does-not-exist", context
-        )
+        await handle_sessions_callback(query, "detail:does-not-exist", context)
         query.answer.assert_called()
         # Should refresh to list
         query.edit_message_text.assert_called_once()
