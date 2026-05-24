@@ -1,5 +1,7 @@
 """Handle inline keyboard callbacks."""
 
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -14,12 +16,72 @@ from ...security.validators import SecurityValidator
 from ...storage.session_storage import SQLiteSessionStorage
 from ..features.session_browser import (
     PAGE_SIZE,
+    derive_fallback_title,
     list_sessions_view,
     session_detail_view,
 )
 from ..utils.html_format import escape_html
 
 logger = structlog.get_logger()
+
+
+_FILENAME_FRAGMENT_RE = re.compile(r"[^\w\-一-鿿]+")
+
+
+def _safe_filename_fragment(s: str, max_len: int = 40) -> str:
+    """Sanitize a string for use in a filename.
+
+    Replaces runs of whitespace and forbidden characters with a single ``_``.
+    Preserves CJK characters along with ASCII word characters and ``-``.
+    """
+    cleaned = _FILENAME_FRAGMENT_RE.sub("_", s).strip("_")
+    return cleaned[:max_len] or "session"
+
+
+async def _check_session_ownership(
+    storage, user_id: int, session_id: str
+) -> str:
+    """Return one of: ``"owned"``, ``"cross_user"``, ``"missing"``."""
+    session = await storage.load_session(session_id, user_id)
+    if session is not None:
+        return "owned"
+    if isinstance(storage, SQLiteSessionStorage):
+        async with storage.db_manager.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT 1 FROM sessions WHERE session_id = ? AND is_active = TRUE",
+                (session_id,),
+            )
+            if (await cursor.fetchone()) is not None:
+                return "cross_user"
+    return "missing"
+
+
+async def _resolve_title_for_handler(
+    storage, project_path, session_id: str
+) -> str:
+    """Local mirror of ``session_browser._resolve_title`` for the callback layer.
+
+    Resolves display title: CLI aiTitle → first prompt → session id-based.
+    """
+    title = await ClaudeIntegration.read_session_title(
+        session_id, Path(str(project_path))
+    )
+    if title:
+        return title
+    first_prompt = None
+    try:
+        msgs = await storage.get_session_messages(session_id, limit=1)
+        if msgs:
+            first = msgs[0]
+            first_prompt = (
+                first.get("prompt") or first.get("content")
+                if isinstance(first, dict)
+                else getattr(first, "prompt", None)
+                or getattr(first, "content", None)
+            )
+    except Exception:
+        pass
+    return derive_fallback_title(first_prompt, session_id)
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
@@ -1416,6 +1478,68 @@ async def handle_sessions_callback(
             await audit_logger.log_event(
                 user_id=user_id,
                 event_type="sessions_detail",
+                event_data={"session_id": session_id},
+                success=True,
+            )
+        return
+
+    if sub_action == "view":
+        session_id = rest
+        ownership = await _check_session_ownership(storage, user_id, session_id)
+        if ownership == "cross_user":
+            await query.answer("无权访问该 session", show_alert=True)
+            if audit_logger:
+                await audit_logger.log_event(
+                    user_id=user_id,
+                    event_type="sessions_cross_user_denied",
+                    event_data={"session_id": session_id, "action": "view"},
+                    success=False,
+                )
+            return
+        if ownership == "missing":
+            await query.answer("session 不存在或已删除")
+            return
+
+        await query.answer("生成 HTML 中…")
+
+        from ..features.session_export import ExportFormat
+
+        exporter = context.bot_data.get("session_exporter")
+        try:
+            exported = await exporter.export_session(
+                user_id=user_id,
+                session_id=session_id,
+                format=ExportFormat.HTML,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to export session HTML",
+                user_id=user_id,
+                session_id=session_id,
+                error=str(e),
+            )
+            await query.message.reply_text(
+                f"❌ <b>生成 HTML 失败：</b><code>{escape_html(type(e).__name__)}</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        title = await _resolve_title_for_handler(
+            storage, current_directory, session_id
+        )
+        date_str = datetime.now(UTC).strftime("%Y%m%d")
+        filename = f"{_safe_filename_fragment(title)}_{date_str}.html"
+
+        await query.message.reply_document(
+            document=exported.content.encode("utf-8"),
+            filename=filename,
+            caption=f"📄 {escape_html(title)}",
+            parse_mode="HTML",
+        )
+        if audit_logger:
+            await audit_logger.log_event(
+                user_id=user_id,
+                event_type="sessions_view_html",
                 event_data={"session_id": session_id},
                 success=True,
             )

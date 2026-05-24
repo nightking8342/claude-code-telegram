@@ -191,3 +191,64 @@ class TestDetailCallback:
         query.answer.assert_called()
         # Should refresh to list
         query.edit_message_text.assert_called_once()
+
+
+class TestViewHtmlCallback:
+    @pytest.mark.asyncio
+    async def test_view_sends_html_document(self, storage):
+        await _save(storage, 42, PROJ, "view-test-sid")
+        query = _fake_query(42, "sessions:view:view-test-sid")
+        context = _fake_context(storage, 42)
+        fake_exporter = MagicMock()
+        fake_exporter.export_session = AsyncMock(
+            return_value=MagicMock(
+                content="<html>history</html>",
+                filename="session_view-test-sid_20260524.html",
+                mime_type="text/html",
+                size_bytes=20,
+            )
+        )
+        context.bot_data["session_exporter"] = fake_exporter
+        with patch(
+            "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="My Title",
+        ):
+            await handle_sessions_callback(query, "view:view-test-sid", context)
+        query.message.reply_document.assert_called_once()
+        kwargs = query.message.reply_document.call_args.kwargs
+        # Filename should be aiTitle-flavored (sanitized) or contain id fragment.
+        assert "My_Title" in kwargs["filename"] or "view-test" in kwargs["filename"]
+        assert kwargs["filename"].endswith(".html")
+
+    @pytest.mark.asyncio
+    async def test_view_cross_user_denied(self, storage):
+        await _save(storage, 99, PROJ, "victim-view")
+        query = _fake_query(42, "sessions:view:victim-view")
+        context = _fake_context(storage, 42)
+        await handle_sessions_callback(query, "view:victim-view", context)
+        query.message.reply_document.assert_not_called()
+        query.answer.assert_called()
+        # Audit event must have been logged
+        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        assert any(
+            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            for c in audit_calls
+        )
+
+    @pytest.mark.asyncio
+    async def test_view_export_failure_replies_with_error(self, storage):
+        await _save(storage, 42, PROJ, "fail-view")
+        query = _fake_query(42, "sessions:view:fail-view")
+        context = _fake_context(storage, 42)
+        fake_exporter = MagicMock()
+        fake_exporter.export_session = AsyncMock(side_effect=ValueError("explode"))
+        context.bot_data["session_exporter"] = fake_exporter
+        with patch(
+            "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await handle_sessions_callback(query, "view:fail-view", context)
+        query.message.reply_text.assert_called_once()
+        assert "失败" in query.message.reply_text.call_args.args[0]
