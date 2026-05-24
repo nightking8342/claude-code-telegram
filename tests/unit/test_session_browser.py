@@ -1,8 +1,16 @@
 """Unit tests for session_browser module."""
 
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
-from src.bot.features.session_browser import derive_fallback_title
+from src.bot.features.session_browser import (
+    derive_fallback_title,
+    list_sessions_view,
+)
+from src.claude.session import ClaudeSession
 
 
 class TestDeriveFallbackTitle:
@@ -37,3 +45,159 @@ class TestDeriveFallbackTitle:
 
     def test_none_prompt_returns_id_based(self):
         assert derive_fallback_title(None, "abcdef1234") == "Session abcdef12"
+
+
+def _fake_session(sid: str, msgs: int = 5, age_min: int = 60):
+    now = datetime.now(UTC) - timedelta(minutes=age_min)
+    return ClaudeSession(
+        session_id=sid,
+        user_id=42,
+        project_path=Path("/proj"),
+        created_at=now,
+        last_used=now,
+        total_cost=0.0,
+        total_turns=0,
+        message_count=msgs,
+        tools_used=[],
+    )
+
+
+class TestListSessionsView:
+    @pytest.mark.asyncio
+    async def test_empty_list_has_no_pagination_buttons(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=0)
+        storage.get_user_sessions = AsyncMock(return_value=[])
+        text, kb = await list_sessions_view(
+            storage=storage, user_id=42, project_path="/proj", page=0
+        )
+        assert "还没有 session" in text
+        assert len(kb.inline_keyboard) == 0
+
+    @pytest.mark.asyncio
+    async def test_single_page_no_pagination_buttons(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=3)
+        storage.get_user_sessions = AsyncMock(
+            return_value=[_fake_session(f"s{i}") for i in range(3)]
+        )
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "src.bot.features.session_browser._first_prompt_for",
+            new_callable=AsyncMock,
+            return_value="hello",
+        ):
+            text, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=0
+            )
+        # 3 session buttons, no pagination row
+        assert len(kb.inline_keyboard) == 3
+        assert all(len(row) == 1 for row in kb.inline_keyboard)
+        assert kb.inline_keyboard[0][0].callback_data == "sessions:detail:s0"
+
+    @pytest.mark.asyncio
+    async def test_multi_page_has_next_button(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=25)
+        storage.get_user_sessions = AsyncMock(
+            return_value=[_fake_session(f"s{i}") for i in range(10)]
+        )
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="title",
+        ):
+            text, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=0
+            )
+        # 10 session rows + 1 nav row
+        assert len(kb.inline_keyboard) == 11
+        nav_row = kb.inline_keyboard[-1]
+        # Page 0: only "next"
+        assert len(nav_row) == 1
+        assert nav_row[0].callback_data == "sessions:list:1"
+
+    @pytest.mark.asyncio
+    async def test_middle_page_has_prev_and_next(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=25)
+        storage.get_user_sessions = AsyncMock(
+            return_value=[_fake_session(f"s{i}") for i in range(10)]
+        )
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="title",
+        ):
+            text, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=1
+            )
+        nav_row = kb.inline_keyboard[-1]
+        assert len(nav_row) == 2
+        assert nav_row[0].callback_data == "sessions:list:0"
+        assert nav_row[1].callback_data == "sessions:list:2"
+
+    @pytest.mark.asyncio
+    async def test_last_page_has_only_prev(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=25)
+        # Page 2 has 5 sessions
+        storage.get_user_sessions = AsyncMock(
+            return_value=[_fake_session(f"s{i}") for i in range(5)]
+        )
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="title",
+        ):
+            text, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=2
+            )
+        nav_row = kb.inline_keyboard[-1]
+        assert len(nav_row) == 1
+        assert nav_row[0].callback_data == "sessions:list:1"
+
+    @pytest.mark.asyncio
+    async def test_page_clamped_to_valid_range(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=5)
+        storage.get_user_sessions = AsyncMock(
+            return_value=[_fake_session(f"s{i}") for i in range(5)]
+        )
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="title",
+        ):
+            text, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=99
+            )
+        # Clamped to page 0 (only 1 page exists)
+        assert "第 1 页 / 共 1 页" in text
+
+    @pytest.mark.asyncio
+    async def test_callback_data_under_64_bytes(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=10)
+        # Real-shaped UUID session ids
+        storage.get_user_sessions = AsyncMock(
+            return_value=[
+                _fake_session("04e2d0f2-095e-4ed7-b429-66c21569830b")
+                for _ in range(10)
+            ]
+        )
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="t",
+        ):
+            _, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=0
+            )
+        for row in kb.inline_keyboard:
+            for btn in row:
+                assert len(btn.callback_data.encode()) <= 64
+
