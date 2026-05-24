@@ -1418,11 +1418,11 @@ async def handle_sessions_callback(
         )
         await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         if audit_logger:
-            await audit_logger.log_event(
+            await audit_logger.log_session_event(
                 user_id=user_id,
-                event_type="sessions_list",
-                event_data={"page": page},
+                action="sessions_list",
                 success=True,
+                details={"page": page},
             )
         return
 
@@ -1453,11 +1453,11 @@ async def handle_sessions_callback(
             if row_exists:
                 await query.answer("无权访问该 session", show_alert=True)
                 if audit_logger:
-                    await audit_logger.log_event(
+                    await audit_logger.log_session_event(
                         user_id=user_id,
-                        event_type="sessions_cross_user_denied",
-                        event_data={"session_id": session_id},
+                        action="sessions_cross_user_denied",
                         success=False,
+                        details={"session_id": session_id},
                     )
                 return
 
@@ -1475,11 +1475,11 @@ async def handle_sessions_callback(
         text, kb = result
         await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         if audit_logger:
-            await audit_logger.log_event(
+            await audit_logger.log_session_event(
                 user_id=user_id,
-                event_type="sessions_detail",
-                event_data={"session_id": session_id},
+                action="sessions_detail",
                 success=True,
+                details={"session_id": session_id},
             )
         return
 
@@ -1489,11 +1489,11 @@ async def handle_sessions_callback(
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
-                await audit_logger.log_event(
+                await audit_logger.log_session_event(
                     user_id=user_id,
-                    event_type="sessions_cross_user_denied",
-                    event_data={"session_id": session_id, "action": "view"},
+                    action="sessions_cross_user_denied",
                     success=False,
+                    details={"session_id": session_id, "action": "view"},
                 )
             return
         if ownership == "missing":
@@ -1535,11 +1535,11 @@ async def handle_sessions_callback(
             parse_mode="HTML",
         )
         if audit_logger:
-            await audit_logger.log_event(
+            await audit_logger.log_session_event(
                 user_id=user_id,
-                event_type="sessions_view_html",
-                event_data={"session_id": session_id},
+                action="sessions_view_html",
                 success=True,
+                details={"session_id": session_id},
             )
         return
 
@@ -1549,11 +1549,11 @@ async def handle_sessions_callback(
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
-                await audit_logger.log_event(
+                await audit_logger.log_session_event(
                     user_id=user_id,
-                    event_type="sessions_cross_user_denied",
-                    event_data={"session_id": session_id, "action": "resume"},
+                    action="sessions_cross_user_denied",
                     success=False,
+                    details={"session_id": session_id, "action": "resume"},
                 )
             return
         if ownership == "missing":
@@ -1568,11 +1568,11 @@ async def handle_sessions_callback(
             parse_mode="HTML",
         )
         if audit_logger:
-            await audit_logger.log_event(
+            await audit_logger.log_session_event(
                 user_id=user_id,
-                event_type="sessions_resume",
-                event_data={"session_id": session_id},
+                action="sessions_resume",
                 success=True,
+                details={"session_id": session_id},
             )
         return
 
@@ -1587,11 +1587,11 @@ async def handle_sessions_callback(
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
-                await audit_logger.log_event(
+                await audit_logger.log_session_event(
                     user_id=user_id,
-                    event_type="sessions_cross_user_denied",
-                    event_data={"session_id": session_id, "action": "export"},
+                    action="sessions_cross_user_denied",
                     success=False,
+                    details={"session_id": session_id, "action": "export"},
                 )
             return
         if ownership == "missing":
@@ -1668,11 +1668,11 @@ async def handle_sessions_callback(
             parse_mode="HTML",
         )
         if audit_logger:
-            await audit_logger.log_event(
+            await audit_logger.log_session_event(
                 user_id=user_id,
-                event_type=f"sessions_export_{fmt}",
-                event_data={"session_id": session_id},
+                action=f"sessions_export_{fmt}",
                 success=True,
+                details={"session_id": session_id},
             )
         return
 

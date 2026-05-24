@@ -58,7 +58,7 @@ def _fake_context(storage, user_id, current_directory=PROJ):
     settings.approved_directory = current_directory
     context.bot_data = {
         "storage": MagicMock(sessions=storage),
-        "audit_logger": MagicMock(log_event=AsyncMock()),
+        "audit_logger": MagicMock(log_session_event=AsyncMock()),
         "settings": settings,
     }
     return context
@@ -173,9 +173,9 @@ class TestDetailCallback:
         # Cross-user → answer_callback_query with alert, no edit
         query.answer.assert_called()
         # Audit event must have been logged
-        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            c.kwargs.get("action") == "sessions_cross_user_denied"
             for c in audit_calls
         )
 
@@ -226,9 +226,9 @@ class TestViewHtmlCallback:
         query.message.reply_document.assert_not_called()
         query.answer.assert_called()
         # Audit event must have been logged
-        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            c.kwargs.get("action") == "sessions_cross_user_denied"
             for c in audit_calls
         )
 
@@ -275,9 +275,9 @@ class TestResumeCallback:
         await handle_sessions_callback(query, "resume:victim-resume", context)
         assert context.user_data.get("claude_session_id") is None
         query.answer.assert_called()
-        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            c.kwargs.get("action") == "sessions_cross_user_denied"
             for c in audit_calls
         )
 
@@ -486,8 +486,8 @@ class TestRuntimeStorageWiring:
         context = _fake_context(repo, 42, current_directory=proj)
         await handle_sessions_callback(query, "detail:victim-sid", context)
         query.answer.assert_called()
-        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            c.kwargs.get("action") == "sessions_cross_user_denied"
             for c in audit_calls
         )

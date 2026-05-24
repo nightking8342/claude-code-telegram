@@ -1398,11 +1398,11 @@ async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
     if audit_logger:
-        await audit_logger.log_event(
+        await audit_logger.log_session_event(
             user_id=user_id,
-            event_type="sessions_command",
-            event_data={"directory": str(current_directory)},
+            action="sessions_command",
             success=True,
+            details={"directory": str(current_directory)},
         )
 
 
