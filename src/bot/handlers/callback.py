@@ -11,6 +11,11 @@ from ...claude.facade import ClaudeIntegration
 from ...config.settings import Settings
 from ...security.audit import AuditLogger
 from ...security.validators import SecurityValidator
+from ..features.session_browser import (
+    PAGE_SIZE,
+    list_sessions_view,
+    session_detail_view,
+)
 from ..utils.html_format import escape_html
 
 logger = structlog.get_logger()
@@ -66,6 +71,7 @@ async def handle_callback_query(
             "conversation": handle_conversation_callback,
             "git": handle_git_callback,
             "export": handle_export_callback,
+            "sessions": handle_sessions_callback,
         }
 
         handler = handlers.get(action)
@@ -1314,3 +1320,50 @@ def _escape_markdown(text: str) -> str:
     Legacy name kept for compatibility with callers; actually escapes HTML.
     """
     return escape_html(text)
+
+
+async def handle_sessions_callback(
+    query, param: str, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Sub-dispatcher for sessions:* callbacks.
+
+    `param` is the portion after `sessions:` — e.g. `list:1`, `detail:<id>`,
+    `view:<id>`, `resume:<id>`, `export:<id>`, `export:<id>:md`, `back:1`.
+    """
+    user_id = query.from_user.id
+    storage = context.bot_data["storage"].sessions
+    audit_logger: AuditLogger = context.bot_data.get("audit_logger")
+    settings: Settings = context.bot_data["settings"]
+    current_directory = context.user_data.get(
+        "current_directory", settings.approved_directory
+    )
+
+    if ":" in param:
+        sub_action, rest = param.split(":", 1)
+    else:
+        sub_action, rest = param, ""
+
+    if sub_action in ("list", "back"):
+        try:
+            page = int(rest) if rest else 0
+        except ValueError:
+            page = 0
+        text, kb = await list_sessions_view(
+            storage=storage,
+            user_id=user_id,
+            project_path=str(current_directory),
+            page=page,
+        )
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        if audit_logger:
+            await audit_logger.log_event(
+                user_id=user_id,
+                event_type="sessions_list",
+                event_data={"page": page},
+                success=True,
+            )
+        return
+
+    await query.edit_message_text(
+        "❌ <b>未知的 session 动作</b>", parse_mode="HTML"
+    )
