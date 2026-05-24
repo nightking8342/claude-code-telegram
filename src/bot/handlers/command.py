@@ -1374,6 +1374,40 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def sessions_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """`/sessions` — list current-directory sessions in a paginated browser.
+
+    Classic-mode entry point. Same logic also bound in orchestrator for
+    agentic mode.
+    """
+    from ..features.session_browser import list_sessions_view
+
+    user_id = update.effective_user.id
+    storage = context.bot_data["storage"].sessions
+    settings: Settings = context.bot_data["settings"]
+    audit_logger: AuditLogger = context.bot_data.get("audit_logger")
+    current_directory = context.user_data.get(
+        "current_directory", settings.approved_directory
+    )
+
+    text, kb = await list_sessions_view(
+        storage=storage,
+        user_id=user_id,
+        project_path=str(current_directory),
+        page=0,
+    )
+    await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
+    if audit_logger:
+        await audit_logger.log_event(
+            user_id=user_id,
+            event_type="sessions_command",
+            event_data={"directory": str(current_directory)},
+            success=True,
+        )
+
+
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /restart command - gracefully restart the bot process.
 

@@ -359,3 +359,37 @@ class TestExportCallback:
         await handle_sessions_callback(query, "export:exp-x:weird", context)
         query.message.reply_document.assert_not_called()
         query.answer.assert_called()
+
+
+class TestSessionsCommand:
+    @pytest.mark.asyncio
+    async def test_lists_only_current_directory(self, storage):
+        proj_a = _norm("/proj-a")
+        proj_b = _norm("/proj-b")
+        # User 42 has sessions in two directories
+        await _save(storage, 42, proj_a, "a1")
+        await _save(storage, 42, proj_b, "b1")
+        # Other user with same directory must NOT appear
+        await _save(storage, 99, proj_a, "other1")
+
+        from src.bot.handlers.command import sessions_command
+
+        update = MagicMock()
+        update.effective_user.id = 42
+        update.message.reply_text = AsyncMock()
+        context = _fake_context(storage, 42, current_directory=proj_a)
+
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="t",
+        ):
+            await sessions_command(update, context)
+
+        update.message.reply_text.assert_called_once()
+        kb = update.message.reply_text.call_args.kwargs["reply_markup"]
+        cbs = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert any("a1" in c for c in cbs)
+        # b1 (other dir) and other1 (other user) must not appear
+        assert not any("b1" in c for c in cbs)
+        assert not any("other1" in c for c in cbs)
