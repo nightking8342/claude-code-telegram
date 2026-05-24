@@ -365,6 +365,7 @@ class MessageOrchestrator:
             ("repo", self.agentic_repo),
             ("provider", self.agentic_provider),
             ("model", self.agentic_model),
+            ("sessions", command.sessions_command),
             ("restart", command.restart_command),
         ]
         if self.settings.enable_project_threads:
@@ -472,6 +473,7 @@ class MessageOrchestrator:
             ("git", command.git_command),
             ("provider", command.provider_command),
             ("model", command.model_command),
+            ("sessions", command.sessions_command),
             ("restart", command.restart_command),
         ]
         if self.settings.enable_project_threads:
@@ -526,6 +528,7 @@ class MessageOrchestrator:
                 BotCommand("repo", "List repos / switch workspace"),
                 BotCommand("provider", "List/switch API providers"),
                 BotCommand("model", "Show/override model"),
+                BotCommand("sessions", "浏览并恢复历史 session"),
                 BotCommand("restart", "Restart the bot"),
             ]
             if self.settings.enable_project_threads:
@@ -544,6 +547,7 @@ class MessageOrchestrator:
                 BotCommand("projects", "Show all projects"),
                 BotCommand("status", "Show session status"),
                 BotCommand("export", "Export current session"),
+                BotCommand("sessions", "浏览并恢复历史 session"),
                 BotCommand("actions", "Show quick actions"),
                 BotCommand("git", "Git repository commands"),
                 BotCommand("provider", "List/switch API providers"),

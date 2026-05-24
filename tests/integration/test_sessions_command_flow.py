@@ -393,3 +393,29 @@ class TestSessionsCommand:
         # b1 (other dir) and other1 (other user) must not appear
         assert not any("b1" in c for c in cbs)
         assert not any("other1" in c for c in cbs)
+
+
+class TestRegistration:
+    @pytest.mark.asyncio
+    async def test_sessions_in_bot_commands_agentic(self):
+        from src.bot.orchestrator import MessageOrchestrator
+
+        settings = MagicMock()
+        settings.agentic_mode = True
+        settings.enable_project_threads = False
+        orch = MessageOrchestrator(settings, deps={})
+        commands = await orch.get_bot_commands()
+        names = {c.command for c in commands}
+        assert "sessions" in names
+
+    @pytest.mark.asyncio
+    async def test_sessions_in_bot_commands_classic(self):
+        from src.bot.orchestrator import MessageOrchestrator
+
+        settings = MagicMock()
+        settings.agentic_mode = False
+        settings.enable_project_threads = False
+        orch = MessageOrchestrator(settings, deps={})
+        commands = await orch.get_bot_commands()
+        names = {c.command for c in commands}
+        assert "sessions" in names
