@@ -11,6 +11,7 @@ from ...claude.facade import ClaudeIntegration
 from ...config.settings import Settings
 from ...security.audit import AuditLogger
 from ...security.validators import SecurityValidator
+from ...storage.session_storage import SQLiteSessionStorage
 from ..features.session_browser import (
     PAGE_SIZE,
     list_sessions_view,
@@ -1360,6 +1361,62 @@ async def handle_sessions_callback(
                 user_id=user_id,
                 event_type="sessions_list",
                 event_data={"page": page},
+                success=True,
+            )
+        return
+
+    if sub_action == "detail":
+        session_id = rest
+        result = await session_detail_view(
+            storage=storage,
+            user_id=user_id,
+            session_id=session_id,
+            back_page=0,
+        )
+        if result is None:
+            # Distinguish "cross-user" from "missing" — the session row may
+            # exist but be owned by a different user.
+            row_exists = False
+            if isinstance(storage, SQLiteSessionStorage):
+                async with storage.db_manager.get_connection() as conn:
+                    cursor = await conn.execute(
+                        "SELECT 1 FROM sessions "
+                        "WHERE session_id = ? AND is_active = TRUE",
+                        (session_id,),
+                    )
+                    row_exists = (await cursor.fetchone()) is not None
+
+            if row_exists:
+                await query.answer("无权访问该 session", show_alert=True)
+                if audit_logger:
+                    await audit_logger.log_event(
+                        user_id=user_id,
+                        event_type="sessions_cross_user_denied",
+                        event_data={"session_id": session_id},
+                        success=False,
+                    )
+                return
+
+            await query.answer("session 不存在或已删除")
+            # Refresh to list page 0
+            text, kb = await list_sessions_view(
+                storage=storage,
+                user_id=user_id,
+                project_path=str(current_directory),
+                page=0,
+            )
+            await query.edit_message_text(
+                text, reply_markup=kb, parse_mode="HTML"
+            )
+            return
+
+        text, kb = result
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        if audit_logger:
+            await audit_logger.log_event(
+                user_id=user_id,
+                event_type="sessions_detail",
+                event_data={"session_id": session_id},
                 success=True,
             )
         return

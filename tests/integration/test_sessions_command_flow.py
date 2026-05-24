@@ -145,3 +145,49 @@ class TestRouterRegistration:
             mock_handler.assert_called_once()
             call_args = mock_handler.call_args
             assert call_args.args[1] == "list:0"
+
+
+class TestDetailCallback:
+    @pytest.mark.asyncio
+    async def test_detail_renders_session_card(self, storage):
+        await _save(storage, 42, PROJ, "my-session-id")
+        query = _fake_query(42, "sessions:detail:my-session-id")
+        context = _fake_context(storage, 42)
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="Hello world",
+        ):
+            await handle_sessions_callback(
+                query, "detail:my-session-id", context
+            )
+        query.edit_message_text.assert_called_once()
+        text = query.edit_message_text.call_args.args[0]
+        assert "Hello world" in text
+        assert "my-session-id" in text
+
+    @pytest.mark.asyncio
+    async def test_detail_cross_user_denied_with_audit(self, storage):
+        await _save(storage, 99, PROJ, "victim-sid")
+        query = _fake_query(42, "sessions:detail:victim-sid")
+        context = _fake_context(storage, 42)
+        await handle_sessions_callback(query, "detail:victim-sid", context)
+        # Cross-user → answer_callback_query with alert, no edit
+        query.answer.assert_called()
+        # Audit event must have been logged
+        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        assert any(
+            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            for c in audit_calls
+        )
+
+    @pytest.mark.asyncio
+    async def test_detail_nonexistent_session(self, storage):
+        query = _fake_query(42, "sessions:detail:does-not-exist")
+        context = _fake_context(storage, 42)
+        await handle_sessions_callback(
+            query, "detail:does-not-exist", context
+        )
+        query.answer.assert_called()
+        # Should refresh to list
+        query.edit_message_text.assert_called_once()
