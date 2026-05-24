@@ -60,14 +60,38 @@ class SessionExporter:
             ValueError: If session not found or invalid format
         """
         # Get session data
-        session = await self.storage.sessions.get_session(session_id)
-        if not session:
+        session_model = await self.storage.sessions.get_session(session_id)
+        if not session_model:
             raise ValueError(f"Session {session_id} not found")
 
         # Get session messages
-        messages = await self.storage.messages.get_session_messages(
+        message_models = await self.storage.messages.get_session_messages(
             session_id, limit=MAX_SESSION_LENGTH
         )
+
+        # Convert models to dicts for export methods
+        session = {
+            "id": session_model.session_id,
+            "user_id": session_model.user_id,
+            "created_at": session_model.created_at,
+            "updated_at": session_model.last_used,
+        }
+        messages = []
+        for i, msg in enumerate(message_models):
+            if msg.prompt:
+                messages.append({
+                    "id": i,
+                    "role": "user",
+                    "content": msg.prompt,
+                    "created_at": msg.timestamp,
+                })
+            if msg.response:
+                messages.append({
+                    "id": i,
+                    "role": "assistant",
+                    "content": msg.response,
+                    "created_at": msg.timestamp,
+                })
 
         # Export based on format
         if format == ExportFormat.MARKDOWN:
