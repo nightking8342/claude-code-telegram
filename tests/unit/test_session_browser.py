@@ -9,6 +9,7 @@ import pytest
 from src.bot.features.session_browser import (
     derive_fallback_title,
     list_sessions_view,
+    session_detail_view,
 )
 from src.claude.session import ClaudeSession
 
@@ -200,4 +201,69 @@ class TestListSessionsView:
         for row in kb.inline_keyboard:
             for btn in row:
                 assert len(btn.callback_data.encode()) <= 64
+
+
+class TestSessionDetailView:
+    @pytest.mark.asyncio
+    async def test_renders_metadata_and_three_action_buttons(self):
+        storage = AsyncMock()
+        storage.load_session = AsyncMock(
+            return_value=_fake_session("abc-123", msgs=23)
+        )
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="my title",
+        ):
+            text, kb = await session_detail_view(
+                storage=storage,
+                user_id=42,
+                session_id="abc-123",
+                back_page=0,
+            )
+        assert "my title" in text
+        assert "abc-123" in text
+        assert "23" in text
+        # Buttons: view / resume / export / back
+        flat = [btn for row in kb.inline_keyboard for btn in row]
+        cbs = {b.callback_data for b in flat}
+        assert "sessions:view:abc-123" in cbs
+        assert "sessions:resume:abc-123" in cbs
+        assert "sessions:export:abc-123" in cbs
+        assert "sessions:back:0" in cbs
+
+    @pytest.mark.asyncio
+    async def test_back_button_carries_page_number(self):
+        storage = AsyncMock()
+        storage.load_session = AsyncMock(return_value=_fake_session("abc-123"))
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value=None,
+        ), patch(
+            "src.bot.features.session_browser._first_prompt_for",
+            new_callable=AsyncMock,
+            return_value="hi",
+        ):
+            _, kb = await session_detail_view(
+                storage=storage,
+                user_id=42,
+                session_id="abc-123",
+                back_page=5,
+            )
+        cbs = {b.callback_data for row in kb.inline_keyboard for b in row}
+        assert "sessions:back:5" in cbs
+
+    @pytest.mark.asyncio
+    async def test_cross_user_session_returns_none(self):
+        storage = AsyncMock()
+        # load_session is filtered by user_id and returns None on mismatch
+        storage.load_session = AsyncMock(return_value=None)
+        result = await session_detail_view(
+            storage=storage,
+            user_id=999,
+            session_id="abc-123",
+            back_page=0,
+        )
+        assert result is None
 

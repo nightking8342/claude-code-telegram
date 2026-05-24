@@ -165,3 +165,60 @@ async def list_sessions_view(
         f"<code>{escape_path(project_path)}</code>"
     )
     return text, InlineKeyboardMarkup(rows)
+
+
+async def session_detail_view(
+    storage: Any,
+    user_id: int,
+    session_id: str,
+    back_page: int,
+) -> Optional[Tuple[str, InlineKeyboardMarkup]]:
+    """Render the detail view for a single session.
+
+    Returns None if the session is not owned by user_id (or doesn't exist).
+    """
+    session = await storage.load_session(session_id, user_id)
+    if session is None:
+        return None
+
+    title = await _resolve_title(storage, str(session.project_path), session_id)
+
+    text_lines = [
+        f"📄 <b>{escape_path(title)}</b>",
+        "",
+        f"创建于 {session.created_at.strftime('%Y-%m-%d %H:%M')}",
+        f"最近活动 {_format_relative_time(session.last_used)}",
+        f"消息数 {session.message_count} · 累计费用 ${session.total_cost:.4f}",
+        f"<code>{escape_path(session_id)}</code>",
+    ]
+    text = "\n".join(text_lines)
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "📄 查看 HTML",
+                    callback_data=f"sessions:view:{session_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "▶ 恢复继续",
+                    callback_data=f"sessions:resume:{session_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "📦 导出其它格式",
+                    callback_data=f"sessions:export:{session_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "← 返回列表",
+                    callback_data=f"sessions:back:{back_page}",
+                )
+            ],
+        ]
+    )
+    return text, keyboard
