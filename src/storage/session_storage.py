@@ -169,23 +169,41 @@ class SQLiteSessionStorage(SessionStorage):
 
         logger.debug("Session marked as inactive", session_id=session_id)
 
-    async def get_user_sessions(self, user_id: int) -> List[ClaudeSession]:
-        """Get all active sessions for a user."""
+    async def get_user_sessions(
+        self,
+        user_id: int,
+        project_path: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> List[ClaudeSession]:
+        """Get active sessions for a user, optionally filtered by project_path
+        and paginated.
+
+        Args:
+            user_id: user owning the sessions
+            project_path: if given, only sessions for this working directory
+            limit: max rows; None = no limit
+            offset: rows to skip (for pagination)
+        """
+        sql = "SELECT * FROM sessions WHERE user_id = ? AND is_active = TRUE"
+        params: list = [user_id]
+        if project_path is not None:
+            sql += " AND project_path = ?"
+            params.append(project_path)
+        sql += " ORDER BY last_used DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
         async with self.db_manager.get_connection() as conn:
-            cursor = await conn.execute(
-                """
-                SELECT * FROM sessions
-                WHERE user_id = ? AND is_active = TRUE
-                ORDER BY last_used DESC
-            """,
-                (user_id,),
-            )
+            cursor = await conn.execute(sql, params)
             rows = await cursor.fetchall()
 
-            sessions = []
-            for row in rows:
-                session_model = SessionModel.from_row(row)
-                claude_session = ClaudeSession(
+        sessions = []
+        for row in rows:
+            session_model = SessionModel.from_row(row)
+            sessions.append(
+                ClaudeSession(
                     session_id=session_model.session_id,
                     user_id=session_model.user_id,
                     project_path=Path(session_model.project_path),
@@ -196,9 +214,26 @@ class SQLiteSessionStorage(SessionStorage):
                     message_count=session_model.message_count,
                     tools_used=[],  # Tools are tracked separately
                 )
-                sessions.append(claude_session)
+            )
+        return sessions
 
-            return sessions
+    async def count_user_sessions(
+        self, user_id: int, project_path: Optional[str] = None
+    ) -> int:
+        """Count active sessions for a user, optionally scoped to one project."""
+        sql = (
+            "SELECT COUNT(*) FROM sessions "
+            "WHERE user_id = ? AND is_active = TRUE"
+        )
+        params: list = [user_id]
+        if project_path is not None:
+            sql += " AND project_path = ?"
+            params.append(project_path)
+
+        async with self.db_manager.get_connection() as conn:
+            cursor = await conn.execute(sql, params)
+            row = await cursor.fetchone()
+            return int(row[0]) if row else 0
 
     async def get_all_sessions(self) -> List[ClaudeSession]:
         """Get all active sessions."""
