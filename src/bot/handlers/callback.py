@@ -13,7 +13,6 @@ from ...claude.facade import ClaudeIntegration
 from ...config.settings import Settings
 from ...security.audit import AuditLogger
 from ...security.validators import SecurityValidator
-from ...storage.session_storage import SQLiteSessionStorage
 from ..features.session_browser import (
     derive_fallback_title,
     list_sessions_view,
@@ -38,12 +37,18 @@ def _safe_filename_fragment(s: str, max_len: int = 40) -> str:
 
 
 async def _check_session_ownership(storage, user_id: int, session_id: str) -> str:
-    """Return one of: ``"owned"``, ``"cross_user"``, ``"missing"``."""
+    """Return one of: ``"owned"``, ``"cross_user"``, ``"missing"``.
+
+    The runtime passes a ``SessionRepository`` (``.db``); existing tests pass
+    a ``SQLiteSessionStorage`` (``.db_manager``). Either is fine — we just
+    need any object exposing ``get_connection()``.
+    """
     session = await storage.load_session(session_id, user_id)
     if session is not None:
         return "owned"
-    if isinstance(storage, SQLiteSessionStorage):
-        async with storage.db_manager.get_connection() as conn:
+    db = getattr(storage, "db", None) or getattr(storage, "db_manager", None)
+    if db is not None:
+        async with db.get_connection() as conn:
             cursor = await conn.execute(
                 "SELECT 1 FROM sessions WHERE session_id = ? AND is_active = TRUE",
                 (session_id,),
@@ -1433,8 +1438,11 @@ async def handle_sessions_callback(
             # Distinguish "cross-user" from "missing" — the session row may
             # exist but be owned by a different user.
             row_exists = False
-            if isinstance(storage, SQLiteSessionStorage):
-                async with storage.db_manager.get_connection() as conn:
+            db = getattr(storage, "db", None) or getattr(
+                storage, "db_manager", None
+            )
+            if db is not None:
+                async with db.get_connection() as conn:
                     cursor = await conn.execute(
                         "SELECT 1 FROM sessions "
                         "WHERE session_id = ? AND is_active = TRUE",

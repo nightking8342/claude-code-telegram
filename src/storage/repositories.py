@@ -179,21 +179,77 @@ class SessionRepository:
             await conn.commit()
 
     async def get_user_sessions(
-        self, user_id: int, active_only: bool = True
+        self,
+        user_id: int,
+        active_only: bool = True,
+        project_path: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
     ) -> List[SessionModel]:
-        """Get sessions for user."""
+        """Get sessions for user.
+
+        Args:
+            user_id: Telegram user id.
+            active_only: Only return non-deleted sessions (default True).
+            project_path: Optional working-directory filter for the /sessions
+                browser. Compared as a string against the stored value.
+            limit: Optional page size. If omitted, no limit is applied.
+            offset: Row offset for pagination (default 0). Ignored when
+                ``limit`` is None.
+        """
         async with self.db.get_connection() as conn:
             query = "SELECT * FROM sessions WHERE user_id = ?"
-            params = [user_id]
+            params: list = [user_id]
 
             if active_only:
                 query += " AND is_active = TRUE"
+            if project_path is not None:
+                query += " AND project_path = ?"
+                params.append(project_path)
 
             query += " ORDER BY last_used DESC"
+
+            if limit is not None:
+                query += " LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
 
             cursor = await conn.execute(query, params)
             rows = await cursor.fetchall()
             return [SessionModel.from_row(row) for row in rows]
+
+    async def count_user_sessions(
+        self, user_id: int, project_path: Optional[str] = None
+    ) -> int:
+        """Count active sessions for a user, optionally scoped to a project."""
+        async with self.db.get_connection() as conn:
+            query = (
+                "SELECT COUNT(*) FROM sessions "
+                "WHERE user_id = ? AND is_active = TRUE"
+            )
+            params: list = [user_id]
+            if project_path is not None:
+                query += " AND project_path = ?"
+                params.append(project_path)
+
+            cursor = await conn.execute(query, params)
+            row = await cursor.fetchone()
+            return int(row[0]) if row else 0
+
+    async def load_session(
+        self, session_id: str, user_id: int
+    ) -> Optional[SessionModel]:
+        """Get a session by id but only when it belongs to user_id.
+
+        Returns None for both "missing" and "owned by someone else" — callers
+        that need to distinguish should probe the row separately.
+        """
+        async with self.db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM sessions WHERE session_id = ? AND user_id = ?",
+                (session_id, user_id),
+            )
+            row = await cursor.fetchone()
+            return SessionModel.from_row(row) if row else None
 
     async def cleanup_old_sessions(self, days: int = 30) -> int:
         """Mark old sessions as inactive."""

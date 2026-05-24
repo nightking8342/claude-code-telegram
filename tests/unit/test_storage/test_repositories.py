@@ -535,3 +535,138 @@ class TestAnalyticsRepository:
         assert stats["overall"]["total_sessions"] >= 1
         assert stats["overall"]["total_messages"] >= 3
         assert stats["overall"]["total_cost"] >= 0.3
+
+
+class TestSessionRepositoryPagination:
+    """Coverage for the /sessions browser paths."""
+
+    @pytest.fixture(autouse=True)
+    async def _seed_users(self, user_repo):
+        """Sessions table has a FK to users — create the test users upfront."""
+        for uid in (1, 42, 99):
+            await user_repo.create_user(
+                UserModel(
+                    user_id=uid,
+                    telegram_username=f"user{uid}",
+                    first_seen=datetime.now(UTC),
+                    last_active=datetime.now(UTC),
+                    is_allowed=True,
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_get_user_sessions_backward_compatible(self, session_repo):
+        """Old call signature (user_id, active_only) keeps working."""
+        now = datetime.now(UTC)
+        for i in range(3):
+            await session_repo.create_session(
+                SessionModel(
+                    session_id=f"sid{i}",
+                    user_id=1,
+                    project_path="/proj",
+                    created_at=now - timedelta(minutes=i),
+                    last_used=now - timedelta(minutes=i),
+                )
+            )
+        sessions = await session_repo.get_user_sessions(1)
+        assert len(sessions) == 3
+
+    @pytest.mark.asyncio
+    async def test_get_user_sessions_filters_by_project_path(self, session_repo):
+        now = datetime.now(UTC)
+        await session_repo.create_session(
+            SessionModel(
+                session_id="a1",
+                user_id=1,
+                project_path="/proj-a",
+                created_at=now,
+                last_used=now,
+            )
+        )
+        await session_repo.create_session(
+            SessionModel(
+                session_id="b1",
+                user_id=1,
+                project_path="/proj-b",
+                created_at=now,
+                last_used=now,
+            )
+        )
+        only_a = await session_repo.get_user_sessions(1, project_path="/proj-a")
+        assert {s.session_id for s in only_a} == {"a1"}
+
+    @pytest.mark.asyncio
+    async def test_get_user_sessions_paginates(self, session_repo):
+        now = datetime.now(UTC)
+        for i in range(25):
+            await session_repo.create_session(
+                SessionModel(
+                    session_id=f"sess{i:02d}",
+                    user_id=1,
+                    project_path="/proj",
+                    created_at=now - timedelta(minutes=i),
+                    last_used=now - timedelta(minutes=i),
+                )
+            )
+        page1 = await session_repo.get_user_sessions(
+            1, project_path="/proj", limit=10, offset=0
+        )
+        page3 = await session_repo.get_user_sessions(
+            1, project_path="/proj", limit=10, offset=20
+        )
+        assert len(page1) == 10
+        assert len(page3) == 5
+        # Sorted by last_used DESC: sess00 (youngest) is first.
+        assert page1[0].session_id == "sess00"
+
+    @pytest.mark.asyncio
+    async def test_count_user_sessions(self, session_repo):
+        now = datetime.now(UTC)
+        for i in range(7):
+            await session_repo.create_session(
+                SessionModel(
+                    session_id=f"s{i}",
+                    user_id=1,
+                    project_path="/proj",
+                    created_at=now,
+                    last_used=now,
+                )
+            )
+        assert await session_repo.count_user_sessions(1, project_path="/proj") == 7
+        assert await session_repo.count_user_sessions(1, project_path="/other") == 0
+        # No filter — total active for user.
+        assert await session_repo.count_user_sessions(1) == 7
+
+    @pytest.mark.asyncio
+    async def test_load_session_owned(self, session_repo):
+        now = datetime.now(UTC)
+        await session_repo.create_session(
+            SessionModel(
+                session_id="mine",
+                user_id=42,
+                project_path="/proj",
+                created_at=now,
+                last_used=now,
+            )
+        )
+        s = await session_repo.load_session("mine", 42)
+        assert s is not None
+        assert s.session_id == "mine"
+
+    @pytest.mark.asyncio
+    async def test_load_session_cross_user_returns_none(self, session_repo):
+        now = datetime.now(UTC)
+        await session_repo.create_session(
+            SessionModel(
+                session_id="theirs",
+                user_id=99,
+                project_path="/proj",
+                created_at=now,
+                last_used=now,
+            )
+        )
+        assert await session_repo.load_session("theirs", 42) is None
+
+    @pytest.mark.asyncio
+    async def test_load_session_missing(self, session_repo):
+        assert await session_repo.load_session("does-not-exist", 42) is None

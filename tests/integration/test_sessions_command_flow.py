@@ -415,3 +415,79 @@ class TestRegistration:
         commands = await orch.get_bot_commands()
         names = {c.command for c in commands}
         assert "sessions" in names
+
+
+class TestRuntimeStorageWiring:
+    """Tests against SessionRepository — the storage class the live bot wires
+    to ``context.bot_data["storage"].sessions``. Catches interface drift that
+    SQLiteSessionStorage-based tests would miss (see the AttributeError on
+    count_user_sessions that shipped in the first /sessions cut)."""
+
+    @pytest_asyncio.fixture
+    async def repo_storage(self, tmp_path):
+        from src.storage.models import SessionModel, UserModel
+        from src.storage.repositories import SessionRepository, UserRepository
+
+        db = DatabaseManager(str(tmp_path / "test.db"))
+        await db.initialize()
+        user_repo = UserRepository(db)
+        session_repo = SessionRepository(db)
+        # Seed users (FK constraint on sessions.user_id)
+        for uid in (42, 99):
+            await user_repo.create_user(
+                UserModel(
+                    user_id=uid,
+                    telegram_username=f"user{uid}",
+                    first_seen=datetime.now(UTC),
+                    last_active=datetime.now(UTC),
+                    is_allowed=True,
+                )
+            )
+
+        async def _save(user_id, project, sid, age=1):
+            now = datetime.now(UTC) - timedelta(minutes=age)
+            await session_repo.create_session(
+                SessionModel(
+                    session_id=sid,
+                    user_id=user_id,
+                    project_path=project,
+                    created_at=now,
+                    last_used=now,
+                    message_count=5,
+                )
+            )
+
+        yield session_repo, _save
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_list_against_real_session_repository(self, repo_storage):
+        repo, save = repo_storage
+        proj = _norm("/proj")
+        for i in range(3):
+            await save(42, proj, f"s{i}", age=i)
+
+        query = _fake_query(42, "sessions:list:0")
+        context = _fake_context(repo, 42, current_directory=proj)
+        with patch(
+            "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="t",
+        ):
+            await handle_sessions_callback(query, "list:0", context)
+        query.edit_message_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_detail_cross_user_denied_against_real_repo(self, repo_storage):
+        repo, save = repo_storage
+        proj = _norm("/proj")
+        await save(99, proj, "victim-sid")
+        query = _fake_query(42, "sessions:detail:victim-sid")
+        context = _fake_context(repo, 42, current_directory=proj)
+        await handle_sessions_callback(query, "detail:victim-sid", context)
+        query.answer.assert_called()
+        audit_calls = context.bot_data["audit_logger"].log_event.call_args_list
+        assert any(
+            c.kwargs.get("event_type") == "sessions_cross_user_denied"
+            for c in audit_calls
+        )
