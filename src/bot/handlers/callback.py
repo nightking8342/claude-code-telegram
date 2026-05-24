@@ -1580,6 +1580,108 @@ async def handle_sessions_callback(
             )
         return
 
+    if sub_action == "export":
+        # rest is either "<id>" (show submenu) or "<id>:<fmt>" (do export)
+        if ":" in rest:
+            session_id, fmt = rest.split(":", 1)
+        else:
+            session_id, fmt = rest, ""
+
+        ownership = await _check_session_ownership(storage, user_id, session_id)
+        if ownership == "cross_user":
+            await query.answer("无权访问该 session", show_alert=True)
+            if audit_logger:
+                await audit_logger.log_event(
+                    user_id=user_id,
+                    event_type="sessions_cross_user_denied",
+                    event_data={"session_id": session_id, "action": "export"},
+                    success=False,
+                )
+            return
+        if ownership == "missing":
+            await query.answer("session 不存在或已删除")
+            return
+
+        if not fmt:
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "📝 Markdown",
+                            callback_data=f"sessions:export:{session_id}:md",
+                        ),
+                        InlineKeyboardButton(
+                            "📄 JSON",
+                            callback_data=f"sessions:export:{session_id}:json",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "✖ 取消",
+                            callback_data=f"sessions:detail:{session_id}",
+                        )
+                    ],
+                ]
+            )
+            await query.edit_message_text(
+                "选择导出格式：", reply_markup=kb, parse_mode="HTML"
+            )
+            return
+
+        from ..features.session_export import ExportFormat
+
+        format_map = {
+            "md": ExportFormat.MARKDOWN,
+            "json": ExportFormat.JSON,
+        }
+        export_format = format_map.get(fmt)
+        if export_format is None:
+            await query.answer(f"未知的导出格式：{fmt}")
+            return
+
+        await query.answer("生成中…")
+
+        exporter = context.bot_data.get("session_exporter")
+        try:
+            exported = await exporter.export_session(
+                user_id=user_id,
+                session_id=session_id,
+                format=export_format,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to export session",
+                user_id=user_id,
+                session_id=session_id,
+                format=fmt,
+                error=str(e),
+            )
+            await query.message.reply_text(
+                f"❌ <b>导出失败：</b><code>{escape_html(type(e).__name__)}</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        title = await _resolve_title_for_handler(
+            storage, current_directory, session_id
+        )
+        date_str = datetime.now(UTC).strftime("%Y%m%d")
+        filename = f"{_safe_filename_fragment(title)}_{date_str}.{fmt}"
+        await query.message.reply_document(
+            document=exported.content.encode("utf-8"),
+            filename=filename,
+            caption=f"📦 {escape_html(title)}",
+            parse_mode="HTML",
+        )
+        if audit_logger:
+            await audit_logger.log_event(
+                user_id=user_id,
+                event_type=f"sessions_export_{fmt}",
+                event_data={"session_id": session_id},
+                success=True,
+            )
+        return
+
     await query.edit_message_text(
         "❌ <b>未知的 session 动作</b>", parse_mode="HTML"
     )

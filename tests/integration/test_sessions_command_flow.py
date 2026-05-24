@@ -284,3 +284,78 @@ class TestResumeCallback:
             c.kwargs.get("event_type") == "sessions_cross_user_denied"
             for c in audit_calls
         )
+
+
+class TestExportCallback:
+    @pytest.mark.asyncio
+    async def test_export_top_shows_format_submenu(self, storage):
+        await _save(storage, 42, PROJ, "export-test")
+        query = _fake_query(42, "sessions:export:export-test")
+        context = _fake_context(storage, 42)
+        await handle_sessions_callback(query, "export:export-test", context)
+        query.edit_message_text.assert_called_once()
+        kb = query.edit_message_text.call_args.kwargs["reply_markup"]
+        cbs = {b.callback_data for row in kb.inline_keyboard for b in row}
+        assert "sessions:export:export-test:md" in cbs
+        assert "sessions:export:export-test:json" in cbs
+        # Cancel goes back to detail
+        assert "sessions:detail:export-test" in cbs
+
+    @pytest.mark.asyncio
+    async def test_export_md_sends_markdown(self, storage):
+        await _save(storage, 42, PROJ, "exp-md")
+        query = _fake_query(42, "sessions:export:exp-md:md")
+        context = _fake_context(storage, 42)
+        fake_exporter = MagicMock()
+        fake_exporter.export_session = AsyncMock(
+            return_value=MagicMock(
+                content="# session md",
+                filename="session_exp-md_20260524.md",
+                mime_type="text/markdown",
+                size_bytes=12,
+            )
+        )
+        context.bot_data["session_exporter"] = fake_exporter
+        with patch(
+            "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="MD title",
+        ):
+            await handle_sessions_callback(query, "export:exp-md:md", context)
+        query.message.reply_document.assert_called_once()
+        kwargs = query.message.reply_document.call_args.kwargs
+        assert kwargs["filename"].endswith(".md")
+
+    @pytest.mark.asyncio
+    async def test_export_json_sends_json(self, storage):
+        await _save(storage, 42, PROJ, "exp-json")
+        query = _fake_query(42, "sessions:export:exp-json:json")
+        context = _fake_context(storage, 42)
+        fake_exporter = MagicMock()
+        fake_exporter.export_session = AsyncMock(
+            return_value=MagicMock(
+                content='{"x":1}',
+                filename="x.json",
+                mime_type="application/json",
+                size_bytes=7,
+            )
+        )
+        context.bot_data["session_exporter"] = fake_exporter
+        with patch(
+            "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await handle_sessions_callback(query, "export:exp-json:json", context)
+        query.message.reply_document.assert_called_once()
+        kwargs = query.message.reply_document.call_args.kwargs
+        assert kwargs["filename"].endswith(".json")
+
+    @pytest.mark.asyncio
+    async def test_export_unknown_format_falls_back(self, storage):
+        await _save(storage, 42, PROJ, "exp-x")
+        query = _fake_query(42, "sessions:export:exp-x:weird")
+        context = _fake_context(storage, 42)
+        await handle_sessions_callback(query, "export:exp-x:weird", context)
+        query.message.reply_document.assert_not_called()
+        query.answer.assert_called()
