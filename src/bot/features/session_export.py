@@ -60,12 +60,12 @@ class SessionExporter:
             ValueError: If session not found or invalid format
         """
         # Get session data
-        session = await self.storage.get_session(user_id, session_id)
+        session = await self.storage.sessions.get_session(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
 
         # Get session messages
-        messages = await self.storage.get_session_messages(
+        messages = await self.storage.messages.get_session_messages(
             session_id, limit=MAX_SESSION_LENGTH
         )
 
