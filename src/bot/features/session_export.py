@@ -191,135 +191,137 @@ class SessionExporter:
         return json.dumps(export_data, indent=2, ensure_ascii=False)
 
     async def _export_html(self, session: dict, messages: list) -> str:
-        """Export session as HTML.
-
-        Args:
-            session: Session metadata
-            messages: List of messages
-
-        Returns:
-            HTML formatted content
-        """
-        # Convert markdown content to HTML-safe format
-        markdown_content = await self._export_markdown(session, messages)
-        html_content = self._markdown_to_html(markdown_content)
-
-        # HTML template
-        template = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Claude Code Session - {session['id'][:8]}</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }}
-        .container {{
-            background-color: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }}
-        h1 {{
-            color: #2c3e50;
-            border-bottom: 3px solid #3498db;
-            padding-bottom: 10px;
-        }}
-        h3 {{
-            color: #34495e;
-            margin-top: 20px;
-        }}
-        code {{
-            background-color: #f8f8f8;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-        }}
-        pre {{
-            background-color: #f8f8f8;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-            border: 1px solid #e1e4e8;
-        }}
-        .metadata {{
-            background-color: #f0f7ff;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-        }}
-        .message {{
-            margin: 20px 0;
-            padding: 15px;
-            border-left: 4px solid #3498db;
-            background-color: #f9f9f9;
-        }}
-        .message.claude {{
-            border-left-color: #2ecc71;
-        }}
-        .timestamp {{
-            color: #7f8c8d;
-            font-size: 0.9em;
-        }}
-        hr {{
-            border: none;
-            border-top: 1px solid #e1e4e8;
-            margin: 30px 0;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        {html_content}
-    </div>
-</body>
-</html>"""
-
-        return template
-
-    def _markdown_to_html(self, markdown: str) -> str:
-        """Convert markdown to HTML.
-
-        Simple conversion for basic markdown elements.
-
-        Args:
-            markdown: Markdown content
-
-        Returns:
-            HTML content
-        """
-        html = markdown
-
-        # Headers
-        html = html.replace("# ", "<h1>").replace("\n\n", "</h1>\n\n", 1)
-        html = html.replace("### ", "<h3>").replace("\n", "</h3>\n", 3)
-
-        # Bold
+        """Export session as a chat transcript HTML page."""
+        import html as html_mod
         import re
 
-        html = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", html)
+        sid = html_mod.escape(str(session["id"]))
+        created = html_mod.escape(str(session["created_at"]))
+        updated = html_mod.escape(str(session.get("updated_at", "")))
+        msg_count = len(messages)
 
-        # Code blocks
-        html = re.sub(r"`([^`]+)`", r"<code>\1</code>", html)
+        def _render_content(text: str) -> str:
+            """Escape HTML then apply lightweight markdown-ish formatting."""
+            t = html_mod.escape(text)
+            # Fenced code blocks ```lang\n...\n```
+            t = re.sub(
+                r"```(\w*)\n(.*?)```",
+                lambda m: (
+                    f'<pre><code class="lang-{m.group(1)}">'
+                    f"{m.group(2)}</code></pre>"
+                ),
+                t,
+                flags=re.DOTALL,
+            )
+            # Inline code `...`
+            t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+            # Bold **...**
+            t = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", t)
+            # Line breaks
+            t = t.replace("\n", "<br>")
+            return t
 
-        # Line breaks and paragraphs
-        html = html.replace("\n\n", "</p>\n<p>")
-        html = f"<p>{html}</p>"
+        msg_html_parts: list[str] = []
+        for msg in messages:
+            role = msg["role"]
+            content = _render_content(msg["content"])
+            ts = html_mod.escape(str(msg["created_at"]))
+            cls = "user" if role == "user" else "assistant"
+            label = "You" if role == "user" else "Claude"
+            msg_html_parts.append(
+                f'<div class="msg {cls}">'
+                f'<div class="msg-head"><span class="role">{label}</span>'
+                f'<span class="ts">{ts}</span></div>'
+                f'<div class="msg-body">{content}</div></div>'
+            )
 
-        # Clean up empty paragraphs
-        html = html.replace("<p></p>", "")
-        html = html.replace("<p><h", "<h")
-        html = html.replace("</h1></p>", "</h1>")
-        html = html.replace("</h3></p>", "</h3>")
+        messages_html = "\n".join(msg_html_parts)
 
-        # Horizontal rules
-        html = html.replace("<p>---</p>", "<hr>")
-
-        return html
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Session {sid[:8]}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+*,:after,:before{{box-sizing:border-box;margin:0;padding:0}}
+:root{{
+  --bg:#1a1b1e;--surface:#222326;--surface2:#2a2b2f;
+  --border:#363739;--text:#c9ccd1;--text-dim:#76787b;
+  --user-accent:#e0a526;--user-bg:#2a261f;
+  --asst-accent:#3d9eaa;--asst-bg:#1e2a2d;
+  --code-bg:#18191c;
+}}
+html{{font-size:15px}}
+body{{
+  font-family:'IBM Plex Sans',-apple-system,sans-serif;
+  background:var(--bg);color:var(--text);
+  line-height:1.65;min-height:100vh;
+}}
+.wrap{{max-width:820px;margin:0 auto;padding:32px 20px 64px}}
+/* header */
+.hdr{{
+  margin-bottom:32px;padding-bottom:24px;
+  border-bottom:1px solid var(--border);
+}}
+.hdr h1{{
+  font-family:'IBM Plex Mono',monospace;font-size:1.1rem;font-weight:500;
+  color:#e4e5e7;letter-spacing:-.01em;margin-bottom:12px;
+}}
+.meta{{display:flex;flex-wrap:wrap;gap:8px 20px}}
+.meta-item{{
+  font-size:.78rem;color:var(--text-dim);
+  font-family:'IBM Plex Mono',monospace;
+}}
+.meta-item span{{color:var(--text)}}
+/* messages */
+.msg{{margin-bottom:2px;padding:16px 20px;border-radius:6px}}
+.msg.user{{background:var(--user-bg)}}
+.msg.assistant{{background:var(--asst-bg)}}
+.msg-head{{
+  display:flex;align-items:center;gap:10px;margin-bottom:8px;
+}}
+.role{{
+  font-size:.75rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.06em;
+}}
+.msg.user .role{{color:var(--user-accent)}}
+.msg.assistant .role{{color:var(--asst-accent)}}
+.ts{{font-size:.7rem;color:var(--text-dim);font-family:'IBM Plex Mono',monospace}}
+.msg-body{{font-size:.92rem;line-height:1.7}}
+.msg-body code{{
+  font-family:'IBM Plex Mono',monospace;font-size:.84rem;
+  background:var(--code-bg);padding:1px 5px;border-radius:3px;
+}}
+.msg-body pre{{
+  background:var(--code-bg);padding:14px 16px;border-radius:5px;
+  overflow-x:auto;margin:10px 0;
+}}
+.msg-body pre code{{background:none;padding:0;font-size:.82rem}}
+.msg-body strong{{font-weight:600;color:#e4e5e7}}
+/* footer */
+.foot{{
+  margin-top:40px;padding-top:20px;
+  border-top:1px solid var(--border);
+  font-size:.72rem;color:var(--text-dim);
+  font-family:'IBM Plex Mono',monospace;
+  text-align:center;
+}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <h1>Session {sid}</h1>
+    <div class="meta">
+      <div class="meta-item">Created <span>{created}</span></div>
+      {"<div class='meta-item'>Updated <span>" + updated + "</span></div>" if updated else ""}
+      <div class="meta-item">Messages <span>{msg_count}</span></div>
+    </div>
+  </div>
+  {messages_html}
+  <div class="foot">exported by claude-code-telegram</div>
+</div>
+</body>
+</html>"""
