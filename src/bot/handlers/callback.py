@@ -1504,7 +1504,14 @@ async def handle_sessions_callback(
 
         from ..features.session_export import ExportFormat
 
-        exporter = context.bot_data.get("session_exporter")
+        features = context.bot_data.get("features")
+        exporter = features.get_session_export() if features else None
+        if not exporter:
+            await query.message.reply_text(
+                "❌ <b>导出不可用</b>",
+                parse_mode="HTML",
+            )
+            return
         try:
             exported = await exporter.export_session(
                 user_id=user_id,
@@ -1637,7 +1644,14 @@ async def handle_sessions_callback(
 
         await query.answer("生成中…")
 
-        exporter = context.bot_data.get("session_exporter")
+        features = context.bot_data.get("features")
+        exporter = features.get_session_export() if features else None
+        if not exporter:
+            await query.message.reply_text(
+                "❌ <b>导出不可用</b>",
+                parse_mode="HTML",
+            )
+            return
         try:
             exported = await exporter.export_session(
                 user_id=user_id,

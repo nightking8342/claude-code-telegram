@@ -451,6 +451,16 @@ class MessageOrchestrator:
             )
         )
 
+        # Sessions browser callbacks
+        from .handlers import callback
+
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(callback.handle_callback_query),
+                pattern=r"^sessions:",
+            )
+        )
+
         logger.info("Agentic handlers registered")
 
     def _register_classic_handlers(self, app: Application) -> None:

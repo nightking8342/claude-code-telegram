@@ -56,10 +56,13 @@ def _fake_context(storage, user_id, current_directory=PROJ):
     context.user_data = {"current_directory": current_directory}
     settings = MagicMock()
     settings.approved_directory = current_directory
+    features = MagicMock()
+    features.get_session_export.return_value = None
     context.bot_data = {
         "storage": MagicMock(sessions=storage),
         "audit_logger": MagicMock(log_session_event=AsyncMock()),
         "settings": settings,
+        "features": features,
     }
     return context
 
@@ -204,7 +207,7 @@ class TestViewHtmlCallback:
                 size_bytes=20,
             )
         )
-        context.bot_data["session_exporter"] = fake_exporter
+        context.bot_data["features"].get_session_export.return_value = fake_exporter
         with patch(
             "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
             new_callable=AsyncMock,
@@ -239,7 +242,7 @@ class TestViewHtmlCallback:
         context = _fake_context(storage, 42)
         fake_exporter = MagicMock()
         fake_exporter.export_session = AsyncMock(side_effect=ValueError("explode"))
-        context.bot_data["session_exporter"] = fake_exporter
+        context.bot_data["features"].get_session_export.return_value = fake_exporter
         with patch(
             "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
             new_callable=AsyncMock,
@@ -311,7 +314,7 @@ class TestExportCallback:
                 size_bytes=12,
             )
         )
-        context.bot_data["session_exporter"] = fake_exporter
+        context.bot_data["features"].get_session_export.return_value = fake_exporter
         with patch(
             "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
             new_callable=AsyncMock,
@@ -336,7 +339,7 @@ class TestExportCallback:
                 size_bytes=7,
             )
         )
-        context.bot_data["session_exporter"] = fake_exporter
+        context.bot_data["features"].get_session_export.return_value = fake_exporter
         with patch(
             "src.bot.handlers.callback.ClaudeIntegration.read_session_title",
             new_callable=AsyncMock,
