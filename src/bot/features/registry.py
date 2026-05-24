@@ -63,13 +63,12 @@ class FeatureRegistry:
             except Exception as e:
                 logger.error("Failed to initialize quick actions", error=str(e))
 
-        # Session export - classic mode only
-        if not self.config.agentic_mode:
-            try:
-                self.features["session_export"] = SessionExporter(storage=self.storage)
-                logger.info("Session export feature enabled")
-            except Exception as e:
-                logger.error("Failed to initialize session export", error=str(e))
+        # Session export
+        try:
+            self.features["session_export"] = SessionExporter(storage=self.storage)
+            logger.info("Session export feature enabled")
+        except Exception as e:
+            logger.error("Failed to initialize session export", error=str(e))
 
         # Image handling - always enabled
         try:
