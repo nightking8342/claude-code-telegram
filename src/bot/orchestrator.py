@@ -6,11 +6,14 @@ classic mode, delegates to existing full-featured handlers.
 """
 
 import asyncio
+import os
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import structlog
 from telegram import (
@@ -237,8 +240,9 @@ class MessageOrchestrator:
         if not self._is_within(current_dir, project_root) or not current_dir.is_dir():
             current_dir = project_root
 
+        restored_session_id = state.get("claude_session_id")
         context.user_data["current_directory"] = current_dir
-        context.user_data["claude_session_id"] = state.get("claude_session_id")
+        context.user_data["claude_session_id"] = restored_session_id
         context.user_data["_thread_context"] = {
             "chat_id": chat.id,
             "message_thread_id": message_thread_id,
@@ -247,6 +251,33 @@ class MessageOrchestrator:
             "project_root": str(project_root),
             "project_name": project.name,
         }
+
+        # Show resume notification if restoring a session for this topic
+        if restored_session_id:
+            claude_integration = context.bot_data.get("claude_integration")
+            if claude_integration:
+                session_meta = None
+                try:
+                    session_meta = (
+                        await claude_integration.session_manager
+                        .get_or_create_session(
+                            update.effective_user.id,
+                            current_dir,
+                            restored_session_id,
+                        )
+                    )
+                    if getattr(session_meta, "is_new_session", False):
+                        session_meta = None
+                except Exception:
+                    pass
+                resume_text = await self._build_session_resume_text(
+                    restored_session_id,
+                    current_dir,
+                    claude_integration,
+                    session_meta=session_meta,
+                )
+                await update.message.reply_text(resume_text)
+
         return True
 
     def _persist_thread_state(self, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -666,7 +697,9 @@ class MessageOrchestrator:
     async def agentic_model(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Show or override the model."""
+        """Show or override the model (supports per-role configuration)."""
+        from ..config.providers import _parse_context_suffix, _VALID_ROLES
+
         pm = context.bot_data.get("provider_manager")
         if not pm:
             await update.message.reply_text("Provider manager not available.")
@@ -674,64 +707,244 @@ class MessageOrchestrator:
 
         args = update.message.text.split()[1:] if update.message.text else []
 
+        # ── No args: show current config ────────────────────────
         if not args:
             model = pm.get_effective_model() or "default"
+            ctx_window = pm.get_context_window()
             source = pm.get_model_source()
+            ctx_label = f"{ctx_window // 1_000_000}M" if ctx_window >= 1_000_000 else f"{ctx_window // 1_000}k"
+            lines = [
+                "<b>🤖 模型配置</b>\n",
+                f"<b>⚙️ 默认</b>",
+                f"<code>{model}</code>（{source}）",
+                f"窗口 {ctx_label}",
+            ]
+            roles = pm.get_role_models()
+            if roles:
+                role_lines = []
+                for role in _VALID_ROLES:
+                    rm = roles.get(role)
+                    if rm:
+                        role_lines.append(
+                            f"<code>{role}</code> → <code>{rm}</code>"
+                        )
+                if role_lines:
+                    lines.append("\n" + "\n".join(role_lines))
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            return
+
+        first = args[0].strip().lower()
+
+        # ── /model reset: clear all overrides ───────────────────
+        if first == "reset":
+            pm.set_model_override(None)
+            for role in _VALID_ROLES:
+                pm.set_role_model(role, None)
+            model = pm.get_effective_model() or "default"
             await update.message.reply_text(
-                f"Model: <code>{model}</code> (from: {source})",
-                parse_mode="HTML",
+                f"All overrides cleared. Using: <code>{model}</code>", parse_mode="HTML"
             )
             return
 
-        value = args[0].strip()
-        if value.lower() == "reset":
-            pm.set_model_override(None)
-            model = pm.get_effective_model() or "default"
-            await update.message.reply_text(f"Model override cleared. Using: <code>{model}</code>", parse_mode="HTML")
-        else:
-            pm.set_model_override(value)
-            await update.message.reply_text(
-                f"Model override set: <code>{value}</code>\n"
-                f"Provider: {pm.get_active_name() or 'default'}\n"
-                f"Takes effect on next request.",
-                parse_mode="HTML",
+        # ── /model <role> [model|reset]: per-role config ────────
+        role = pm.resolve_role(first)
+        if role:
+            if len(args) < 2:
+                await update.message.reply_text(f"用法: /model {first} <模型名|reset>")
+                return
+            value = args[1].strip()
+            if value.lower() == "reset":
+                pm.set_role_model(role, None)
+                await update.message.reply_text(
+                    f"已清除 <b>{role}</b> 角色模型覆盖", parse_mode="HTML"
+                )
+            else:
+                pm.set_role_model(role, value)
+                await update.message.reply_text(
+                    f"<b>{role}</b> 角色模型设置为: <code>{value}</code>\n"
+                    f"Takes effect on next request.",
+                    parse_mode="HTML",
+                )
+            return
+
+        # ── /model <name>: set default model override ───────────
+        pm.set_model_override(first)
+        await update.message.reply_text(
+            f"Model override set: <code>{first}</code>\n"
+            f"Provider: {pm.get_active_name() or 'default'}\n"
+            f"Takes effect on next request.",
+            parse_mode="HTML",
+        )
+
+    @staticmethod
+    def _display_width(text: str) -> int:
+        """Estimate display width treating CJK / emoji / fullwidth as 2."""
+        w = 0
+        for ch in text:
+            eaw = unicodedata.east_asian_width(ch)
+            w += 2 if eaw in ("W", "F") else 1
+        return w
+
+    # ------------------------------------------------------------------ #
+    #  Session resume notification                                        #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _relative_time(dt: Optional[datetime]) -> str:
+        """Return a human-readable relative time string."""
+        if dt is None:
+            return ""
+        now = datetime.now(UTC)
+        # Ensure dt is timezone-aware
+        if dt.tzinfo is None:
+            from datetime import timezone
+
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = now - dt
+        seconds = int(delta.total_seconds())
+        if seconds < 60:
+            return "刚刚"
+        if seconds < 3600:
+            return f"{seconds // 60}分钟前"
+        if seconds < 86400:
+            return f"{seconds // 3600}小时前"
+        return f"{seconds // 86400}天前"
+
+    async def _build_session_resume_text(
+        self,
+        session_id: str,
+        project_path: Path,
+        claude_integration: Any,
+        session_meta: Any = None,
+    ) -> str:
+        """Build a notification text for session resume.
+
+        Args:
+            session_id: The Claude session UUID.
+            project_path: The working directory of the session.
+            claude_integration: The ClaudeIntegration facade instance.
+            session_meta: Optional ClaudeSession with last_used, total_turns.
+        """
+        title = await claude_integration.read_session_title(
+            session_id, project_path
+        )
+        dir_name = project_path.name or str(project_path)
+
+        meta_parts: List[str] = []
+        if session_meta:
+            rel = self._relative_time(getattr(session_meta, "last_used", None))
+            if rel:
+                meta_parts.append(rel)
+            turns = getattr(session_meta, "total_turns", 0)
+            if turns:
+                meta_parts.append(f"{turns}轮")
+
+        if title:
+            line2_parts = [session_id, dir_name] + meta_parts
+            return f"📎 {title}\n   {' · '.join(line2_parts)}"
+        # No title — session_id is the headline
+        line2_parts = [dir_name] + meta_parts
+        return f"📎 {session_id}\n   {' · '.join(line2_parts)}"
+
+    @staticmethod
+    async def _git_info(repo_path: str) -> Tuple[str, int, int]:
+        """Return (branch, staged_count, modified_count) for a git repo."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git", "branch", "--show-current",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=repo_path,
             )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            branch = stdout.decode().strip() or "HEAD"
+
+            proc2 = await asyncio.create_subprocess_exec(
+                "git", "diff", "--cached", "--numstat",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=repo_path,
+            )
+            out2, _ = await asyncio.wait_for(proc2.communicate(), timeout=5)
+            staged = len([l for l in out2.decode().strip().split("\n") if l])
+
+            proc3 = await asyncio.create_subprocess_exec(
+                "git", "diff", "--numstat",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=repo_path,
+            )
+            out3, _ = await asyncio.wait_for(proc3.communicate(), timeout=5)
+            modified = len([l for l in out3.decode().strip().split("\n") if l])
+
+            return branch, staged, modified
+        except Exception:
+            return "", 0, 0
 
     async def agentic_status(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Compact one-line status, no buttons."""
-        current_dir = context.user_data.get(
-            "current_directory", self.settings.approved_directory
-        )
-        dir_display = str(current_dir)
+        """Statusline-style two-line status display."""
+        try:
+            current_dir = context.user_data.get(
+                "current_directory", self.settings.approved_directory
+            )
+            dir_name = os.path.basename(str(current_dir)) or str(current_dir)
 
-        session_id = context.user_data.get("claude_session_id")
-        session_status = "active" if session_id else "none"
+            # Model name
+            pm = context.bot_data.get("provider_manager")
+            model_name = ""
+            if pm:
+                from ..config.providers import _parse_context_suffix
+                raw = pm.get_effective_model() or ""
+                model_name, _ = _parse_context_suffix(raw)
+                model_name = model_name.replace("claude-", "")
 
-        # Cost info
-        cost_str = ""
-        rate_limiter = context.bot_data.get("rate_limiter")
-        if rate_limiter:
-            try:
-                user_status = rate_limiter.get_user_status(update.effective_user.id)
-                cost_usage = user_status.get("cost_usage", {})
-                current_cost = cost_usage.get("current", 0.0)
-                cost_str = f" · Cost: ${current_cost:.2f}"
-            except Exception:
-                pass
+            # Git info — only show real branches
+            branch, staged, modified = await self._git_info(str(current_dir))
+            if branch == "HEAD":
+                branch = ""
 
-        # Provider info
-        provider_str = ""
-        pm = context.bot_data.get("provider_manager")
-        if pm:
-            active_name = pm.get_active_name() or "default"
-            model = pm.get_effective_model() or "default"
-            provider_str = f" · Provider: {active_name} · Model: {model}"
+            # Line 1: model · directory · git
+            parts = []
+            if model_name:
+                parts.append(f"🧠 {model_name}")
+            parts.append(f"📂 {dir_name}")
+            if branch:
+                git_parts = [f"🌿 {branch}"]
+                if staged:
+                    git_parts.append(f"+{staged}")
+                if modified:
+                    git_parts.append(f"~{modified}")
+                parts.append(" ".join(git_parts))
+            line1 = "  ".join(parts)
 
-        await update.message.reply_text(
-            f"📂 {dir_display} · Session: {session_status}{cost_str}{provider_str}"
-        )
+            # Line 2: progress bar · context percentage · token count
+            usage = context.user_data.get("last_usage") or {}
+
+            def _int(d: dict, *keys: str) -> int:
+                for k in keys:
+                    v = d.get(k)
+                    if isinstance(v, (int, float)) and v >= 0:
+                        return int(v)
+                return 0
+
+            ctx_tok = _int(usage, "input_tokens", "prompt_tokens")
+            ctx_window = pm.get_context_window() if pm else 200_000
+            ctx_pct = min(100, ctx_tok * 100 // ctx_window)
+            tok_str = f"{ctx_tok // 1000}k" if ctx_tok >= 1000 else str(ctx_tok)
+
+            bar_len = 15
+            filled = ctx_pct * bar_len // 100
+            bar = "▓" * filled + "░" * (bar_len - filled)
+            line2 = f"{bar}  {ctx_pct}%  {tok_str}"
+
+            await update.message.reply_text(
+                f"```\n{line1}\n{line2}\n```", parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error("agentic_status_error", error=str(e))
+            await update.message.reply_text(f"Status error: {e}")
 
     def _get_verbose_level(self, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Return effective verbose level: per-user override or global default."""
@@ -1205,6 +1418,10 @@ class MessageOrchestrator:
                 context.user_data["force_new_session"] = False
 
             context.user_data["claude_session_id"] = claude_response.session_id
+            context.user_data["last_usage"] = claude_response.usage
+            context.user_data["last_model_usage"] = getattr(
+                claude_response, "model_usage", None
+            )
 
             # Track directory changes
             from .handlers.message import _update_working_directory_from_claude_response
@@ -1796,23 +2013,40 @@ class MessageOrchestrator:
             # Try to find a resumable session
             claude_integration = context.bot_data.get("claude_integration")
             session_id = None
+            existing_session = None
             if claude_integration:
-                existing = await claude_integration._find_resumable_session(
-                    update.effective_user.id, target_path
+                existing_session = (
+                    await claude_integration._find_resumable_session(
+                        update.effective_user.id, target_path
+                    )
                 )
-                if existing:
-                    session_id = existing.session_id
+                if existing_session:
+                    session_id = existing_session.session_id
             context.user_data["claude_session_id"] = session_id
 
             is_git = (target_path / ".git").is_dir()
             git_badge = " (git)" if is_git else ""
-            session_badge = " · session resumed" if session_id else ""
 
-            await update.message.reply_text(
+            switch_msg = (
                 f"Switched to <code>{escape_html(target_name)}/</code>"
-                f"{git_badge}{session_badge}",
-                parse_mode="HTML",
+                f"{git_badge}"
             )
+
+            if session_id and claude_integration:
+                resume_text = await self._build_session_resume_text(
+                    session_id,
+                    target_path,
+                    claude_integration,
+                    session_meta=existing_session,
+                )
+                await update.message.reply_text(
+                    f"{switch_msg}\n\n{resume_text}",
+                    parse_mode="HTML",
+                )
+            else:
+                await update.message.reply_text(
+                    switch_msg, parse_mode="HTML"
+                )
             return
 
         # No args — list repos
@@ -2311,23 +2545,40 @@ class MessageOrchestrator:
         # Look for a resumable session instead of always clearing
         claude_integration = context.bot_data.get("claude_integration")
         session_id = None
+        existing_session = None
         if claude_integration:
-            existing = await claude_integration._find_resumable_session(
-                query.from_user.id, new_path
+            existing_session = (
+                await claude_integration._find_resumable_session(
+                    query.from_user.id, new_path
+                )
             )
-            if existing:
-                session_id = existing.session_id
+            if existing_session:
+                session_id = existing_session.session_id
         context.user_data["claude_session_id"] = session_id
 
         is_git = (new_path / ".git").is_dir()
         git_badge = " (git)" if is_git else ""
-        session_badge = " · session resumed" if session_id else ""
 
-        await query.edit_message_text(
+        switch_msg = (
             f"Switched to <code>{escape_html(project_name)}/</code>"
-            f"{git_badge}{session_badge}",
-            parse_mode="HTML",
+            f"{git_badge}"
         )
+
+        if session_id and claude_integration:
+            resume_text = await self._build_session_resume_text(
+                session_id,
+                new_path,
+                claude_integration,
+                session_meta=existing_session,
+            )
+            await query.edit_message_text(
+                f"{switch_msg}\n\n{resume_text}",
+                parse_mode="HTML",
+            )
+        else:
+            await query.edit_message_text(
+                switch_msg, parse_mode="HTML"
+            )
 
         # Audit log
         audit_logger = context.bot_data.get("audit_logger")

@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional
 
 import structlog
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -296,6 +297,7 @@ class ClaudeCodeBot:
             RateLimitExceeded: "⏱️ Rate limit exceeded. Please wait before sending more messages.",
             ConfigurationError: "⚙️ Configuration error. Please contact the administrator.",
             asyncio.TimeoutError: "⏰ Operation timed out. Please try again with a simpler request.",
+            NetworkError: "🌐 Network connection issue. Please try again in a moment.",
         }
 
         error_type = type(error)

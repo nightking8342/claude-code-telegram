@@ -2,15 +2,46 @@
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
 _ENV_KEYS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL")
+
+# Context window suffixes: [1m] = 1,000,000 tokens, [200k] = 200,000, etc.
+_CONTEXT_SUFFIX_RE = re.compile(r"\[(\d+)(k|m)\]$", re.IGNORECASE)
+_DEFAULT_CONTEXT_WINDOW = 200_000
+
+# Role shorthand aliases
+_ROLE_ALIASES = {"o": "opus", "s": "sonnet", "h": "haiku"}
+_VALID_ROLES = ("opus", "sonnet", "haiku")
+_ROLE_ENV_MAP = {
+    "opus": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "sonnet": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "haiku": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+}
+
+
+def _parse_context_suffix(model: str) -> Tuple[str, int]:
+    """Strip context-window suffix and return (clean_name, window_size).
+
+    Examples:
+        "claude-sonnet-4[1m]"     -> ("claude-sonnet-4", 1_000_000)
+        "claude-opus-4[200k]"     -> ("claude-opus-4", 200_000)
+        "claude-sonnet-4"         -> ("claude-sonnet-4", 200_000)
+    """
+    m = _CONTEXT_SUFFIX_RE.search(model)
+    if not m:
+        return model, _DEFAULT_CONTEXT_WINDOW
+    num = int(m.group(1))
+    unit = m.group(2).lower()
+    multiplier = 1_000_000 if unit == "m" else 1_000
+    return model[: m.start()], num * multiplier
 
 
 @dataclass
@@ -21,6 +52,9 @@ class ProviderProfile:
     api_key: Optional[str] = None
     default_model: Optional[str] = None
     description: Optional[str] = None
+    opus_model: Optional[str] = None
+    sonnet_model: Optional[str] = None
+    haiku_model: Optional[str] = None
 
 
 class ProviderManager:
@@ -127,13 +161,29 @@ class ProviderManager:
             logger.info("Model override cleared")
 
     def get_effective_model(self) -> Optional[str]:
-        """Return the effective model: override > profile default > config default."""
+        """Return the effective model name (may include [1m] suffix)."""
         if self._model_override:
             return self._model_override
         active = self.get_active()
         if active and active.default_model:
             return active.default_model
         return getattr(self._config, "claude_model", None)
+
+    def get_clean_model(self) -> Optional[str]:
+        """Return the effective model name with context suffix stripped."""
+        raw = self.get_effective_model()
+        if raw is None:
+            return None
+        clean, _ = _parse_context_suffix(raw)
+        return clean
+
+    def get_context_window(self) -> int:
+        """Return the context window size for the effective model."""
+        raw = self.get_effective_model()
+        if raw is None:
+            return _DEFAULT_CONTEXT_WINDOW
+        _, window = _parse_context_suffix(raw)
+        return window
 
     def get_model_source(self) -> str:
         """Return where the effective model comes from."""
@@ -143,6 +193,38 @@ class ProviderManager:
         if active and active.default_model:
             return "profile"
         return "settings"
+
+    # ── Per-role model overrides ────────────────────────────────
+
+    @staticmethod
+    def resolve_role(name: str) -> Optional[str]:
+        """Resolve role alias to canonical name. Returns None if invalid."""
+        if name in _VALID_ROLES:
+            return name
+        return _ROLE_ALIASES.get(name.lower())
+
+    def set_role_model(self, role: str, model: Optional[str]) -> None:
+        """Set (or clear) the model for a role on the active profile."""
+        active = self.get_active()
+        if not active:
+            raise RuntimeError("No active provider profile")
+        setattr(active, f"{role}_model", model)
+        self._save()
+        if model:
+            logger.info("Role model set", role=role, model=model)
+        else:
+            logger.info("Role model cleared", role=role)
+
+    def get_role_models(self) -> Dict[str, Optional[str]]:
+        """Return {opus, sonnet, haiku} model mapping for the active profile."""
+        active = self.get_active()
+        if not active:
+            return {r: None for r in _VALID_ROLES}
+        return {
+            "opus": active.opus_model,
+            "sonnet": active.sonnet_model,
+            "haiku": active.haiku_model,
+        }
 
     # ── Environment injection ────────────────────────────────────
 
@@ -162,6 +244,11 @@ class ProviderManager:
             "ANTHROPIC_API_KEY": active.api_key,
             "ANTHROPIC_MODEL": self.get_effective_model(),
         }
+        # Inject per-role model env vars
+        for role, env_key in _ROLE_ENV_MAP.items():
+            role_model = getattr(active, f"{role}_model", None)
+            if role_model:
+                mapping[env_key] = role_model
         for key, value in mapping.items():
             saved[key] = os.environ.get(key)
             if value is not None:

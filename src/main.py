@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
 from datetime import UTC, datetime
@@ -224,6 +225,35 @@ async def run_application(app: Dict[str, Any]) -> None:
     features: FeatureFlags = app["features"]
     event_bus: EventBus = app["event_bus"]
 
+    # ── Single-instance guard via PID file ───────────────────────
+    pid_path = Path.home() / ".claude-tg-bot" / "bot.pid"
+    try:
+        if pid_path.exists():
+            old_pid = int(pid_path.read_text(encoding="utf-8").strip())
+            if old_pid != os.getpid():
+                # Check if old process is still alive
+                import subprocess as _sp
+
+                check = _sp.run(
+                    ["tasklist", "/FI", f"PID eq {old_pid}"],
+                    capture_output=True,
+                    text=True,
+                )
+                if str(old_pid) in check.stdout:
+                    logger.warning(
+                        "Killing duplicate bot process",
+                        old_pid=old_pid,
+                    )
+                    _sp.run(["taskkill", "/PID", str(old_pid), "/F"],
+                            capture_output=True)
+    except Exception as exc:
+        logger.debug("PID file check failed", error=str(exc))
+
+    # Write current PID
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    # ── End single-instance guard ────────────────────────────────
+
     notification_service: Optional[NotificationService] = None
     scheduler: Optional[JobScheduler] = None
     project_threads_manager: Optional[ProjectThreadManager] = None
@@ -309,12 +339,33 @@ async def run_application(app: Dict[str, Any]) -> None:
                     - datetime.fromisoformat(marker["timestamp"])
                 ).total_seconds()
                 if age < 300:  # only if marker is < 5 minutes old
+                    text = "✅ <b>Restart complete.</b>\n\nBot is back online."
+
+                    # Append session resume info for the root directory
+                    try:
+                        user_id = marker["user_id"]
+                        root_dir = Path(config.approved_directory)
+                        existing = (
+                            await claude_integration
+                            ._find_resumable_session(user_id, root_dir)
+                        )
+                        if existing:
+                            title = (
+                                await claude_integration.read_session_title(
+                                    existing.session_id, root_dir
+                                )
+                            )
+                            headline = title if title else existing.session_id
+                            text += (
+                                f"\n\n📎 {headline}"
+                                f"\n   {root_dir.name}"
+                            )
+                    except Exception:
+                        pass
+
                     await telegram_bot.send_message(
                         chat_id=marker["chat_id"],
-                        text=(
-                            "✅ <b>Restart complete.</b>\n\n"
-                            "Bot is back online."
-                        ),
+                        text=text,
                         parse_mode="HTML",
                     )
                     logger.info(
@@ -405,6 +456,13 @@ async def run_application(app: Dict[str, Any]) -> None:
             await storage.close()
         except Exception as e:
             logger.error("Error during shutdown", error=str(e))
+
+        # Clean up PID file
+        try:
+            pid_path = Path.home() / ".claude-tg-bot" / "bot.pid"
+            pid_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
         logger.info("Application shutdown complete")
 

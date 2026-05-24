@@ -176,7 +176,7 @@ async def handle_cd_callback(
             if existing_session:
                 context.user_data["claude_session_id"] = existing_session.session_id
                 resumed_session_info = (
-                    f"\n🔄 Resumed session <code>{escape_html(existing_session.session_id[:8])}...</code> "
+                    f"\n🔄 Resumed session <code>{escape_html(existing_session.session_id)}</code> "
                     f"({existing_session.message_count} messages)"
                 )
             else:
@@ -554,7 +554,7 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
             # Continue with the existing session (no prompt = use --continue)
             await query.edit_message_text(
                 f"🔄 <b>Continuing Session</b>\n\n"
-                f"Session ID: <code>{escape_html(claude_session_id[:8])}...</code>\n"
+                f"Session ID: <code>{escape_html(claude_session_id)}</code>\n"
                 f"Directory: <code>{escape_html(str(current_dir.relative_to(settings.approved_directory)))}/</code>\n\n"
                 f"Continuing where you left off...",
                 parse_mode="HTML",
@@ -671,7 +671,7 @@ async def _handle_status_action(query, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if claude_session_id:
         status_lines.append(
-            f"🆔 Session ID: <code>{escape_html(claude_session_id[:8])}...</code>"
+            f"🆔 Session ID: <code>{escape_html(claude_session_id)}</code>"
         )
 
     # Add action buttons

@@ -60,6 +60,7 @@ class ClaudeResponse:
     tools_used: List[Dict[str, Any]] = field(default_factory=list)
     interrupted: bool = False
     usage: Optional[Dict[str, Any]] = None
+    model_usage: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -329,6 +330,7 @@ class ClaudeSDKManager:
                 sdk_disallowed_tools = self.config.claude_disallowed_tools
 
             # Resolve effective model (override > profile > config)
+            # Pass model name as-is (including [1m] suffix) — CLI handles it natively.
             if self.provider_manager:
                 effective_model = self.provider_manager.get_effective_model() or None
             else:
@@ -492,11 +494,8 @@ class ClaudeSDKManager:
 
                 # Note: asyncio.TimeoutError is intentionally NOT retried —
                 # it reflects a user-configured hard limit.
-                # When claude_timeout_seconds <= 0, use a safety cap of 30
-                # minutes so a hung subprocess never blocks the event loop
-                # and its lock forever.  max_turns still applies as the
-                # primary bound; this is only a backstop.
-                _SAFETY_TIMEOUT = 1800  # 30 minutes
+                # When claude_timeout_seconds <= 0, skip the timeout wrapper
+                # so execution is bounded only by max_turns.
                 timeout = self.config.claude_timeout_seconds
                 try:
                     if timeout > 0:
@@ -505,10 +504,7 @@ class ClaudeSDKManager:
                             timeout=timeout,
                         )
                     else:
-                        await asyncio.wait_for(
-                            asyncio.shield(run_task),
-                            timeout=_SAFETY_TIMEOUT,
-                        )
+                        await run_task
                     break  # success — exit retry loop
                 except asyncio.CancelledError:
                     if not interrupted:
@@ -549,6 +545,7 @@ class ClaudeSDKManager:
             claude_session_id = None
             result_content = None
             usage: Optional[Dict[str, Any]] = None
+            model_usage: Optional[Dict[str, Any]] = None
             for message in messages:
                 if isinstance(message, ResultMessage):
                     cost = getattr(message, "total_cost_usd", 0.0) or 0.0
@@ -557,6 +554,9 @@ class ClaudeSDKManager:
                     raw_usage = getattr(message, "usage", None)
                     if isinstance(raw_usage, dict):
                         usage = raw_usage
+                    raw_model_usage = getattr(message, "model_usage", None)
+                    if isinstance(raw_model_usage, dict):
+                        model_usage = raw_model_usage
                     current_time = asyncio.get_event_loop().time()
                     for msg in messages:
                         if isinstance(msg, AssistantMessage):
@@ -642,6 +642,7 @@ class ClaudeSDKManager:
                 tools_used=tools_used,
                 interrupted=interrupted,
                 usage=usage,
+                model_usage=model_usage,
             )
 
         except asyncio.TimeoutError:

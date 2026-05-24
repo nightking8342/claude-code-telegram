@@ -4,6 +4,7 @@ Provides simple interface for bot handlers.
 """
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -206,6 +207,88 @@ class ClaudeIntegration:
             return None
 
         return max(matching_sessions, key=lambda s: s.last_used)
+
+    # ------------------------------------------------------------------ #
+    #  Transcript title helpers                                           #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _encode_project_path(project_path: Path) -> str:
+        """Encode a filesystem path for Claude's transcript directory.
+
+        Claude Code stores transcripts under
+        ``~/.claude/projects/{encoded_path}/`` where the encoding replaces
+        the drive-colon-followed-by-separator with ``--`` and remaining
+        separators with ``-``.
+
+        Examples::
+
+            D:\\claudebot\\project       ->  D--claudebot-project
+            /home/user/project          ->  -home-user-project
+        """
+        return (
+            str(project_path)
+            .replace(":\\", "--")
+            .replace(":/", "--")
+            .replace("\\", "-")
+            .replace("/", "-")
+        )
+
+    @staticmethod
+    async def read_session_title(
+        session_id: str, project_path: Path
+    ) -> Optional[str]:
+        """Read the AI-generated title from Claude's transcript JSONL.
+
+        Scans the file in reverse to find the *last* ``ai-title`` entry
+        (titles can be updated during a conversation).  Returns ``None``
+        when the file is missing, empty, or contains no title.
+        """
+        import os
+
+        encoded = ClaudeIntegration._encode_project_path(project_path)
+        home = Path(os.path.expanduser("~"))
+        jsonl_path = (
+            home / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
+        )
+
+        if not jsonl_path.is_file():
+            return None
+
+        try:
+            # Read in reverse to find the last ai-title quickly.
+            # For files up to a few MB this is fine; read all lines and
+            # scan backwards.  The ai-title entry is usually near the top
+            # but may be updated later, so we need the *last* occurrence.
+            loop = asyncio.get_running_loop()
+            title: Optional[str] = None
+
+            def _read() -> Optional[str]:
+                result: Optional[str] = None
+                with open(jsonl_path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                            if obj.get("type") == "ai-title":
+                                ai_title = obj.get("aiTitle")
+                                if ai_title:
+                                    result = ai_title
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                return result
+
+            title = await loop.run_in_executor(None, _read)
+            return title
+        except Exception:
+            logger.debug(
+                "Failed to read session title",
+                session_id=session_id,
+                path=str(jsonl_path),
+            )
+            return None
 
     async def continue_session(
         self,

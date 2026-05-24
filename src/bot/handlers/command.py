@@ -328,7 +328,7 @@ async def new_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     cleared_info = ""
     if old_session_id:
         cleared_info = (
-            f"\n🗑️ Previous session <code>{old_session_id[:8]}...</code> cleared."
+            f"\n🗑️ Previous session <code>{old_session_id}</code> cleared."
         )
 
     keyboard = [
@@ -390,7 +390,7 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             # We have a session in context, continue it directly
             status_msg = await update.message.reply_text(
                 f"🔄 <b>Continuing Session</b>\n\n"
-                f"Session ID: <code>{claude_session_id[:8]}...</code>\n"
+                f"Session ID: <code>{claude_session_id}</code>\n"
                 f"Directory: <code>{current_dir.relative_to(settings.approved_directory)}/</code>\n\n"
                 f"{'Processing your message...' if prompt else 'Continuing where you left off...'}",
                 parse_mode="HTML",
@@ -701,7 +701,7 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if existing_session:
                 context.user_data["claude_session_id"] = existing_session.session_id
                 resumed_session_info = (
-                    f"\n🔄 Resumed session <code>{existing_session.session_id[:8]}...</code> "
+                    f"\n🔄 Resumed session <code>{existing_session.session_id}</code> "
                     f"({existing_session.message_count} messages)"
                 )
             else:
@@ -902,7 +902,7 @@ async def session_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             if existing:
                 resumable_info = (
-                    f"🔄 Resumable: <code>{existing.session_id[:8]}...</code> "
+                    f"🔄 Resumable: <code>{existing.session_id}</code> "
                     f"({existing.message_count} msgs)"
                 )
 
@@ -917,7 +917,7 @@ async def session_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ]
 
     if claude_session_id:
-        status_lines.append(f"🆔 Session ID: <code>{claude_session_id[:8]}...</code>")
+        status_lines.append(f"🆔 Session ID: <code>{claude_session_id}</code>")
     elif resumable_info:
         status_lines.append(resumable_info)
         status_lines.append("💡 Session will auto-resume on your next message")
@@ -1005,7 +1005,7 @@ async def export_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await update.message.reply_text(
         "📤 <b>Export Session</b>\n\n"
-        f"Ready to export session: <code>{claude_session_id[:8]}...</code>\n\n"
+        f"Ready to export session: <code>{claude_session_id}</code>\n\n"
         "<b>Choose export format:</b>",
         parse_mode="HTML",
         reply_markup=reply_markup,
@@ -1305,7 +1305,9 @@ async def handle_provider_callback(update: Update, context: ContextTypes.DEFAULT
 
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /model command — show or override the model."""
+    """Handle /model command — show or override the model (supports per-role config)."""
+    from ...config.providers import _parse_context_suffix, _VALID_ROLES
+
     pm = context.bot_data.get("provider_manager")
     if not pm:
         await update.message.reply_text("Provider manager not available.")
@@ -1313,28 +1315,63 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     args = update.message.text.split()[1:] if update.message.text else []
 
+    # No args: show current config
     if not args:
         model = pm.get_effective_model() or "default"
         source = pm.get_model_source()
+        lines = [f"Model: <code>{model}</code> ({source})"]
+        roles = pm.get_role_models()
+        for role in _VALID_ROLES:
+            rm = roles.get(role)
+            if rm:
+                lines.append(f"  {role}: <code>{rm}</code>")
+            else:
+                lines.append(f"  {role}: —")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    first = args[0].strip().lower()
+
+    # /model reset: clear all overrides
+    if first == "reset":
+        pm.set_model_override(None)
+        for role in _VALID_ROLES:
+            pm.set_role_model(role, None)
+        model = pm.get_effective_model() or "default"
         await update.message.reply_text(
-            f"Model: <code>{model}</code> (from: {source})",
-            parse_mode="HTML",
+            f"All overrides cleared. Using: <code>{model}</code>", parse_mode="HTML"
         )
         return
 
-    value = args[0].strip()
-    if value.lower() == "reset":
-        pm.set_model_override(None)
-        model = pm.get_effective_model() or "default"
-        await update.message.reply_text(f"Model override cleared. Using: <code>{model}</code>", parse_mode="HTML")
-    else:
-        pm.set_model_override(value)
-        await update.message.reply_text(
-            f"Model override set: <code>{value}</code>\n"
-            f"Provider: {pm.get_active_name() or 'default'}\n"
-            f"Takes effect on next request.",
-            parse_mode="HTML",
-        )
+    # /model <role> [model|reset]: per-role config
+    role = pm.resolve_role(first)
+    if role:
+        if len(args) < 2:
+            await update.message.reply_text(f"Usage: /model {first} <model|reset>")
+            return
+        value = args[1].strip()
+        if value.lower() == "reset":
+            pm.set_role_model(role, None)
+            await update.message.reply_text(
+                f"Cleared <b>{role}</b> role model.", parse_mode="HTML"
+            )
+        else:
+            pm.set_role_model(role, value)
+            await update.message.reply_text(
+                f"<b>{role}</b> role model set to: <code>{value}</code>\n"
+                f"Takes effect on next request.",
+                parse_mode="HTML",
+            )
+        return
+
+    # /model <name>: set default model override
+    pm.set_model_override(first)
+    await update.message.reply_text(
+        f"Model override set: <code>{first}</code>\n"
+        f"Provider: {pm.get_active_name() or 'default'}\n"
+        f"Takes effect on next request.",
+        parse_mode="HTML",
+    )
 
 
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
