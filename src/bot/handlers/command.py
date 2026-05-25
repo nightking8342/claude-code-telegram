@@ -61,8 +61,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if settings.enable_project_threads and settings.project_threads_mode == "private":
         if not _is_private_chat(update):
             await update.message.reply_text(
-                "🚫 <b>Private Topics Mode</b>\n\n"
-                "Use this bot in a private chat and run <code>/start</code> there.",
+                "🚫 <b>私有话题模式</b>\n\n"
+                "请在与机器人的私聊中运行 <code>/start</code>。",
                 parse_mode="HTML",
             )
             return
@@ -74,8 +74,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     ):
         if manager is None:
             await update.message.reply_text(
-                "❌ <b>Project thread mode is misconfigured</b>\n\n"
-                "Thread manager is not initialized.",
+                "❌ <b>项目话题模式配置错误</b>\n\n"
+                "话题管理器未初始化。",
                 parse_mode="HTML",
             )
             return
@@ -86,12 +86,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 chat_id=update.effective_chat.id,
             )
             sync_section = (
-                "\n\n🧵 <b>Project Topics Synced</b>\n"
-                f"• Created: <b>{sync_result.created}</b>\n"
-                f"• Reused: <b>{sync_result.reused}</b>\n"
-                f"• Renamed: <b>{sync_result.renamed}</b>\n"
-                f"• Failed: <b>{sync_result.failed}</b>\n\n"
-                "Use a project topic thread to start coding."
+                "\n\n🧵 <b>项目话题已同步</b>\n"
+                f"• 新建: <b>{sync_result.created}</b>\n"
+                f"• 复用: <b>{sync_result.reused}</b>\n"
+                f"• 重命名: <b>{sync_result.renamed}</b>\n"
+                f"• 失败: <b>{sync_result.failed}</b>\n\n"
+                "使用项目话题线程开始编码。"
             )
         except PrivateTopicsUnavailableError:
             await update.message.reply_text(
@@ -108,29 +108,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
         except Exception as e:
             sync_section = (
-                "\n\n⚠️ <b>Topic Sync Warning</b>\n"
+                "\n\n⚠️ <b>话题同步警告</b>\n"
                 f"{escape_html(str(e))}\n\n"
-                "Run <code>/sync_threads</code> to retry."
+                "运行 <code>/sync_threads</code> 重试。"
             )
 
     welcome_message = (
-        f"👋 Welcome to Claude Code Telegram Bot, {escape_html(user.first_name)}!\n\n"
-        f"🤖 I help you access Claude Code remotely through Telegram.\n\n"
-        f"<b>Available Commands:</b>\n"
-        f"• <code>/help</code> - Show detailed help\n"
-        f"• <code>/new</code> - Start a new Claude session\n"
-        f"• <code>/ls</code> - List files in current directory\n"
-        f"• <code>/cd &lt;dir&gt;</code> - Change directory\n"
-        f"• <code>/projects</code> - Show available projects\n"
-        f"• <code>/status</code> - Show session status\n"
-        f"• <code>/actions</code> - Show quick actions\n"
-        f"• <code>/git</code> - Git repository commands\n\n"
-        f"<b>Quick Start:</b>\n"
-        f"1. Use <code>/projects</code> to see available projects\n"
-        f"2. Use <code>/cd &lt;project&gt;</code> to navigate to a project\n"
-        f"3. Send any message to start coding with Claude!\n\n"
-        f"🔒 Your access is secured and all actions are logged.\n"
-        f"📊 Use <code>/status</code> to check your usage limits."
+        f"👋 欢迎使用 Claude Code Telegram Bot, {escape_html(user.first_name)}!\n\n"
+        f"🤖 我可以帮你通过 Telegram 远程使用 Claude Code。\n\n"
+        f"<b>可用命令:</b>\n"
+        f"• <code>/help</code> - 查看详细帮助\n"
+        f"• <code>/new</code> - 开始新的 Claude session\n"
+        f"• <code>/ls</code> - 列出当前目录文件\n"
+        f"• <code>/cd &lt;dir&gt;</code> - 切换目录\n"
+        f"• <code>/projects</code> - 查看可用项目\n"
+        f"• <code>/status</code> - 查看 session 状态\n"
+        f"• <code>/actions</code> - 查看快捷操作\n"
+        f"• <code>/git</code> - Git 仓库命令\n\n"
+        f"<b>快速开始:</b>\n"
+        f"1. 使用 <code>/projects</code> 查看可用项目\n"
+        f"2. 使用 <code>/cd &lt;project&gt;</code> 进入项目目录\n"
+        f"3. 发送任意消息即可开始与 Claude 协作编码!\n\n"
+        f"🔒 你的访问已受保护，所有操作均有记录。\n"
+        f"📊 使用 <code>/status</code> 查看用量限制。"
         f"{sync_section}"
     )
 
@@ -138,13 +138,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     keyboard = [
         [
             InlineKeyboardButton(
-                "📁 Show Projects", callback_data="action:show_projects"
+                "📁 显示项目", callback_data="action:show_projects"
             ),
-            InlineKeyboardButton("❓ Get Help", callback_data="action:help"),
+            InlineKeyboardButton("❓ 获取帮助", callback_data="action:help"),
         ],
         [
-            InlineKeyboardButton("🆕 New Session", callback_data="action:new_session"),
-            InlineKeyboardButton("📊 Check Status", callback_data="action:status"),
+            InlineKeyboardButton("🆕 新建 Session", callback_data="action:new_session"),
+            InlineKeyboardButton("📊 查看状态", callback_data="action:status"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -163,45 +163,45 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command."""
     help_text = (
-        "🤖 <b>Claude Code Telegram Bot Help</b>\n\n"
-        "<b>Navigation Commands:</b>\n"
-        "• <code>/ls</code> - List files and directories\n"
-        "• <code>/cd &lt;directory&gt;</code> - Change to directory\n"
-        "• <code>/pwd</code> - Show current directory\n"
-        "• <code>/projects</code> - Show available projects\n\n"
-        "<b>Session Commands:</b>\n"
-        "• <code>/new</code> - Clear context and start a fresh session\n"
-        "• <code>/continue [message]</code> - Explicitly continue last session\n"
-        "• <code>/end</code> - End current session and clear context\n"
-        "• <code>/status</code> - Show session and usage status\n"
-        "• <code>/export</code> - Export session history\n"
-        "• <code>/actions</code> - Show context-aware quick actions\n"
-        "• <code>/git</code> - Git repository information\n\n"
-        "<b>Session Behavior:</b>\n"
-        "• Sessions are automatically maintained per project directory\n"
-        "• Switching directories with <code>/cd</code> resumes the session for that project\n"
-        "• Use <code>/new</code> or <code>/end</code> to explicitly clear session context\n"
-        "• Sessions persist across bot restarts\n\n"
-        "<b>Usage Examples:</b>\n"
-        "• <code>cd myproject</code> - Enter project directory\n"
-        "• <code>ls</code> - See what's in current directory\n"
-        "• <code>Create a simple Python script</code> - Ask Claude to code\n"
-        "• Send a file to have Claude review it\n\n"
-        "<b>File Operations:</b>\n"
-        "• Send text files (.py, .js, .md, etc.) for review\n"
-        "• Claude can read, modify, and create files\n"
-        "• All file operations are within your approved directory\n\n"
-        "<b>Security Features:</b>\n"
-        "• 🔒 Path traversal protection\n"
-        "• ⏱️ Rate limiting to prevent abuse\n"
-        "• 📊 Usage tracking and limits\n"
-        "• 🛡️ Input validation and sanitization\n\n"
-        "<b>Tips:</b>\n"
-        "• Use specific, clear requests for best results\n"
-        "• Check <code>/status</code> to monitor your usage\n"
-        "• Use quick action buttons when available\n"
-        "• File uploads are automatically processed by Claude\n\n"
-        "Need more help? Contact your administrator."
+        "🤖 <b>Claude Code Telegram Bot 帮助</b>\n\n"
+        "<b>导航命令:</b>\n"
+        "• <code>/ls</code> - 列出文件和目录\n"
+        "• <code>/cd &lt;directory&gt;</code> - 切换目录\n"
+        "• <code>/pwd</code> - 显示当前目录\n"
+        "• <code>/projects</code> - 显示可用项目\n\n"
+        "<b>Session 命令:</b>\n"
+        "• <code>/new</code> - 清除上下文，开始新 session\n"
+        "• <code>/continue [message]</code> - 继续上一个 session\n"
+        "• <code>/end</code> - 结束当前 session 并清除上下文\n"
+        "• <code>/status</code> - 显示 session 和用量状态\n"
+        "• <code>/export</code> - 导出 session 历史\n"
+        "• <code>/actions</code> - 显示上下文快捷操作\n"
+        "• <code>/git</code> - Git 仓库信息\n\n"
+        "<b>Session 行为:</b>\n"
+        "• 每个项目目录自动维护独立的 session\n"
+        "• 使用 <code>/cd</code> 切换目录时会恢复该项目的 session\n"
+        "• 使用 <code>/new</code> 或 <code>/end</code> 可显式清除 session 上下文\n"
+        "• Session 在机器人重启后仍然保留\n\n"
+        "<b>使用示例:</b>\n"
+        "• <code>cd myproject</code> - 进入项目目录\n"
+        "• <code>ls</code> - 查看当前目录内容\n"
+        "• <code>创建一个简单的 Python 脚本</code> - 让 Claude 编写代码\n"
+        "• 发送文件让 Claude 审查\n\n"
+        "<b>文件操作:</b>\n"
+        "• 发送文本文件 (.py, .js, .md 等) 进行审查\n"
+        "• Claude 可以读取、修改和创建文件\n"
+        "• 所有文件操作均在你的授权目录内\n\n"
+        "<b>安全特性:</b>\n"
+        "• 🔒 路径遍历保护\n"
+        "• ⏱️ 速率限制防止滥用\n"
+        "• 📊 用量追踪和限制\n"
+        "• 🛡️ 输入验证和清理\n\n"
+        "<b>提示:</b>\n"
+        "• 使用具体、清晰的请求以获得最佳结果\n"
+        "• 使用 <code>/status</code> 监控用量\n"
+        "• 有快捷按钮时可直接点击使用\n"
+        "• 上传的文件会自动由 Claude 处理\n\n"
+        "需要更多帮助？请联系管理员。"
     )
 
     await update.message.reply_text(help_text, parse_mode="HTML")
@@ -215,26 +215,26 @@ async def sync_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if not settings.enable_project_threads:
         await update.message.reply_text(
-            "ℹ️ <b>Project thread mode is disabled.</b>", parse_mode="HTML"
+            "ℹ️ <b>项目话题模式已禁用。</b>", parse_mode="HTML"
         )
         return
 
     manager = context.bot_data.get("project_threads_manager")
     if not manager:
         await update.message.reply_text(
-            "❌ <b>Project thread manager not initialized.</b>", parse_mode="HTML"
+            "❌ <b>项目话题管理器未初始化。</b>", parse_mode="HTML"
         )
         return
 
     status_msg = await update.message.reply_text(
-        "🔄 <b>Syncing project topics...</b>", parse_mode="HTML"
+        "🔄 <b>正在同步项目话题...</b>", parse_mode="HTML"
     )
 
     if settings.project_threads_mode == "private":
         if not _is_private_chat(update):
             await status_msg.edit_text(
-                "❌ <b>Private Thread Mode</b>\n\n"
-                "Run <code>/sync_threads</code> in your private chat with the bot.",
+                "❌ <b>私有话题模式</b>\n\n"
+                "请在与机器人的私聊中运行 <code>/sync_threads</code>。",
                 parse_mode="HTML",
             )
             return
@@ -242,8 +242,8 @@ async def sync_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         if settings.project_threads_chat_id is None:
             await status_msg.edit_text(
-                "❌ <b>Group Thread Mode Misconfigured</b>\n\n"
-                "Set <code>PROJECT_THREADS_CHAT_ID</code> first.",
+                "❌ <b>群组话题模式配置错误</b>\n\n"
+                "请先设置 <code>PROJECT_THREADS_CHAT_ID</code>。",
                 parse_mode="HTML",
             )
             return
@@ -252,8 +252,8 @@ async def sync_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             or update.effective_chat.id != settings.project_threads_chat_id
         ):
             await status_msg.edit_text(
-                "❌ <b>Group Thread Mode</b>\n\n"
-                "Run <code>/sync_threads</code> in the configured project threads group.",
+                "❌ <b>群组话题模式</b>\n\n"
+                "请在已配置的项目话题群组中运行 <code>/sync_threads</code>。",
                 parse_mode="HTML",
             )
             return
@@ -262,8 +262,8 @@ async def sync_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         if not settings.projects_config_path:
             await status_msg.edit_text(
-                "❌ <b>Project thread mode is misconfigured</b>\n\n"
-                "Set <code>PROJECTS_CONFIG_PATH</code> to a valid YAML file.",
+                "❌ <b>项目话题模式配置错误</b>\n\n"
+                "请将 <code>PROJECTS_CONFIG_PATH</code> 设置为有效的 YAML 文件。",
                 parse_mode="HTML",
             )
             if audit_logger:
@@ -279,14 +279,14 @@ async def sync_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         result = await manager.sync_topics(context.bot, chat_id=target_chat_id)
         await status_msg.edit_text(
-            "✅ <b>Project topic sync complete</b>\n\n"
-            f"• Created: <b>{result.created}</b>\n"
-            f"• Reused: <b>{result.reused}</b>\n"
-            f"• Renamed: <b>{result.renamed}</b>\n"
-            f"• Reopened: <b>{result.reopened}</b>\n"
-            f"• Closed: <b>{result.closed}</b>\n"
-            f"• Deactivated: <b>{result.deactivated}</b>\n"
-            f"• Failed: <b>{result.failed}</b>",
+            "✅ <b>项目话题同步完成</b>\n\n"
+            f"• 新建: <b>{result.created}</b>\n"
+            f"• 复用: <b>{result.reused}</b>\n"
+            f"• 重命名: <b>{result.renamed}</b>\n"
+            f"• 重新打开: <b>{result.reopened}</b>\n"
+            f"• 关闭: <b>{result.closed}</b>\n"
+            f"• 停用: <b>{result.deactivated}</b>\n"
+            f"• 失败: <b>{result.failed}</b>",
             parse_mode="HTML",
         )
         if audit_logger:
@@ -300,7 +300,7 @@ async def sync_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await audit_logger.log_command(user_id, "sync_threads", [], False)
     except Exception as e:
         await status_msg.edit_text(
-            f"❌ <b>Project topic sync failed</b>\n\n{escape_html(str(e))}",
+            f"❌ <b>项目话题同步失败</b>\n\n{escape_html(str(e))}",
             parse_mode="HTML",
         )
         if audit_logger:
@@ -327,31 +327,31 @@ async def new_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     cleared_info = ""
     if old_session_id:
-        cleared_info = f"\n🗑️ Previous session <code>{old_session_id}</code> cleared."
+        cleared_info = f"\n🗑️ 已清除之前的 session <code>{old_session_id}</code>。"
 
     keyboard = [
         [
             InlineKeyboardButton(
-                "📝 Start Coding", callback_data="action:start_coding"
+                "📝 开始编码", callback_data="action:start_coding"
             ),
             InlineKeyboardButton(
-                "📁 Change Project", callback_data="action:show_projects"
+                "📁 切换项目", callback_data="action:show_projects"
             ),
         ],
         [
             InlineKeyboardButton(
-                "📋 Quick Actions", callback_data="action:quick_actions"
+                "📋 快捷操作", callback_data="action:quick_actions"
             ),
-            InlineKeyboardButton("❓ Help", callback_data="action:help"),
+            InlineKeyboardButton("❓ 帮助", callback_data="action:help"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"🆕 <b>New Claude Code Session</b>\n\n"
-        f"📂 Working directory: <code>{relative_path}/</code>{cleared_info}\n\n"
-        f"Context has been cleared. Send a message to start fresh, "
-        f"or use the buttons below:",
+        f"🆕 <b>新 Claude Code Session</b>\n\n"
+        f"📂 工作目录: <code>{relative_path}/</code>{cleared_info}\n\n"
+        f"上下文已清除。发送消息开始新的对话，"
+        f"或使用下方按钮:",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -367,7 +367,7 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Parse optional prompt from command arguments
     # If no prompt provided, use a default to continue the conversation
     prompt = " ".join(context.args) if context.args else None
-    default_prompt = "Please continue where we left off"
+    default_prompt = "请继续我们之前的对话"
 
     current_dir = context.user_data.get(
         "current_directory", settings.approved_directory
@@ -376,8 +376,8 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     try:
         if not claude_integration:
             await update.message.reply_text(
-                "❌ <b>Claude Integration Not Available</b>\n\n"
-                "Claude integration is not properly configured."
+                "❌ <b>Claude 集成不可用</b>\n\n"
+                "Claude 集成未正确配置。"
             )
             return
 
@@ -387,10 +387,10 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if claude_session_id:
             # We have a session in context, continue it directly
             status_msg = await update.message.reply_text(
-                f"🔄 <b>Continuing Session</b>\n\n"
+                f"🔄 <b>继续 Session</b>\n\n"
                 f"Session ID: <code>{claude_session_id}</code>\n"
-                f"Directory: <code>{current_dir.relative_to(settings.approved_directory)}/</code>\n\n"
-                f"{'Processing your message...' if prompt else 'Continuing where you left off...'}",
+                f"目录: <code>{current_dir.relative_to(settings.approved_directory)}/</code>\n\n"
+                f"{'正在处理你的消息...' if prompt else '正在继续之前的对话...'}",
                 parse_mode="HTML",
             )
 
@@ -405,8 +405,8 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else:
             # No session in context, try to find the most recent session
             status_msg = await update.message.reply_text(
-                "🔍 <b>Looking for Recent Session</b>\n\n"
-                "Searching for your most recent session in this directory...",
+                "🔍 <b>查找最近的 Session</b>\n\n"
+                "正在搜索此目录中你最近的 session...",
                 parse_mode="HTML",
             )
 
@@ -451,22 +451,22 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else:
             # No session found to continue
             await status_msg.edit_text(
-                "❌ <b>No Session Found</b>\n\n"
-                f"No recent Claude session found in this directory.\n"
-                f"Directory: <code>{current_dir.relative_to(settings.approved_directory)}/</code>\n\n"
-                f"<b>What you can do:</b>\n"
-                f"• Use <code>/new</code> to start a fresh session\n"
-                f"• Use <code>/status</code> to check your sessions\n"
-                f"• Navigate to a different directory with <code>/cd</code>",
+                "❌ <b>未找到 Session</b>\n\n"
+                f"在此目录中未找到最近的 Claude session。\n"
+                f"目录: <code>{current_dir.relative_to(settings.approved_directory)}/</code>\n\n"
+                f"<b>你可以:</b>\n"
+                f"• 使用 <code>/new</code> 开始新 session\n"
+                f"• 使用 <code>/status</code> 查看你的 session\n"
+                f"• 使用 <code>/cd</code> 切换到其他目录",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [
                             InlineKeyboardButton(
-                                "🆕 New Session", callback_data="action:new_session"
+                                "🆕 新建 Session", callback_data="action:new_session"
                             ),
                             InlineKeyboardButton(
-                                "📊 Status", callback_data="action:status"
+                                "📊 状态", callback_data="action:status"
                             ),
                         ]
                     ]
@@ -486,13 +486,13 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         # Send error response
         await update.message.reply_text(
-            f"❌ <b>Error Continuing Session</b>\n\n"
-            f"An error occurred while trying to continue your session:\n\n"
+            f"❌ <b>继续 Session 出错</b>\n\n"
+            f"尝试继续 session 时发生错误:\n\n"
             f"<code>{error_msg}</code>\n\n"
-            f"<b>Suggestions:</b>\n"
-            f"• Try starting a new session with <code>/new</code>\n"
-            f"• Check your session status with <code>/status</code>\n"
-            f"• Contact support if the issue persists",
+            f"<b>建议:</b>\n"
+            f"• 尝试使用 <code>/new</code> 开始新 session\n"
+            f"• 使用 <code>/status</code> 检查 session 状态\n"
+            f"• 如问题持续，请联系管理员",
             parse_mode="HTML",
         )
 
@@ -548,7 +548,7 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # Format response
         relative_path = current_dir.relative_to(settings.approved_directory)
         if not items:
-            message = f"📂 <code>{relative_path}/</code>\n\n<i>(empty directory)</i>"
+            message = f"📂 <code>{relative_path}/</code>\n\n<i>(空目录)</i>"
         else:
             message = f"📂 <code>{relative_path}/</code>\n\n"
 
@@ -557,7 +557,7 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if len(items) > max_items:
                 shown_items = items[:max_items]
                 message += "\n".join(shown_items)
-                message += f"\n\n<i>... and {len(items) - max_items} more items</i>"
+                message += f"\n\n<i>... 还有 {len(items) - max_items} 个项目</i>"
             else:
                 message += "\n".join(items)
 
@@ -566,16 +566,16 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if current_dir != settings.approved_directory:
             keyboard.append(
                 [
-                    InlineKeyboardButton("⬆️ Go Up", callback_data="cd:.."),
-                    InlineKeyboardButton("🏠 Go to Root", callback_data="cd:/"),
+                    InlineKeyboardButton("⬆️ 上级目录", callback_data="cd:.."),
+                    InlineKeyboardButton("🏠 返回根目录", callback_data="cd:/"),
                 ]
             )
 
         keyboard.append(
             [
-                InlineKeyboardButton("🔄 Refresh", callback_data="action:refresh_ls"),
+                InlineKeyboardButton("🔄 刷新", callback_data="action:refresh_ls"),
                 InlineKeyboardButton(
-                    "📁 Projects", callback_data="action:show_projects"
+                    "📁 项目", callback_data="action:show_projects"
                 ),
             ]
         )
@@ -591,7 +591,7 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await audit_logger.log_command(user_id, "ls", [], True)
 
     except Exception as e:
-        error_msg = f"❌ Error listing directory: {str(e)}"
+        error_msg = f"❌ 列出目录时出错: {str(e)}"
         await update.message.reply_text(error_msg)
 
         # Log failed command
@@ -611,14 +611,14 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Parse arguments
     if not context.args:
         await update.message.reply_text(
-            "<b>Usage:</b> <code>/cd &lt;directory&gt;</code>\n\n"
-            "<b>Examples:</b>\n"
-            "• <code>/cd myproject</code> - Enter subdirectory\n"
-            "• <code>/cd ..</code> - Go up one level\n"
-            "• <code>/cd /</code> - Go to root of approved directory\n\n"
-            "<b>Tips:</b>\n"
-            "• Use <code>/ls</code> to see available directories\n"
-            "• Use <code>/projects</code> to see all projects",
+            "<b>用法:</b> <code>/cd &lt;directory&gt;</code>\n\n"
+            "<b>示例:</b>\n"
+            "• <code>/cd myproject</code> - 进入子目录\n"
+            "• <code>/cd ..</code> - 返回上一级\n"
+            "• <code>/cd /</code> - 返回授权目录根目录\n\n"
+            "<b>提示:</b>\n"
+            "• 使用 <code>/ls</code> 查看可用目录\n"
+            "• 使用 <code>/projects</code> 查看所有项目",
             parse_mode="HTML",
         )
         return
@@ -647,7 +647,7 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
                 if not valid:
                     await update.message.reply_text(
-                        f"❌ <b>Access Denied</b>\n\n{error}"
+                        f"❌ <b>访问被拒绝</b>\n\n{error}"
                     )
 
                     # Log security violation
@@ -665,8 +665,8 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         if project_root and not _is_within_root(resolved_path, project_root):
             await update.message.reply_text(
-                "❌ <b>Access Denied</b>\n\n"
-                "In thread mode, navigation is limited to the current project root.",
+                "❌ <b>访问被拒绝</b>\n\n"
+                "在话题模式下，导航仅限于当前项目根目录。",
                 parse_mode="HTML",
             )
             return
@@ -674,13 +674,13 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Check if directory exists and is actually a directory
         if not resolved_path.exists():
             await update.message.reply_text(
-                f"❌ <b>Directory Not Found</b>\n\n<code>{target_path}</code> does not exist."
+                f"❌ <b>目录未找到</b>\n\n<code>{target_path}</code> 不存在。"
             )
             return
 
         if not resolved_path.is_dir():
             await update.message.reply_text(
-                f"❌ <b>Not a Directory</b>\n\n<code>{target_path}</code> is not a directory."
+                f"❌ <b>不是目录</b>\n\n<code>{target_path}</code> 不是目录。"
             )
             return
 
@@ -699,14 +699,14 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if existing_session:
                 context.user_data["claude_session_id"] = existing_session.session_id
                 resumed_session_info = (
-                    f"\n🔄 Resumed session <code>{existing_session.session_id}</code> "
-                    f"({existing_session.message_count} messages)"
+                    f"\n🔄 已恢复 session <code>{existing_session.session_id}</code> "
+                    f"({existing_session.message_count} 条消息)"
                 )
             else:
                 # No session for this directory - clear the current one
                 context.user_data["claude_session_id"] = None
                 resumed_session_info = (
-                    "\n🆕 No existing session. Send a message to start a new one."
+                    "\n🆕 无现有 session。发送消息开始新对话。"
                 )
 
         # Send confirmation
@@ -714,8 +714,8 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         relative_path = resolved_path.relative_to(relative_base)
         relative_display = "/" if str(relative_path) == "." else f"{relative_path}/"
         await update.message.reply_text(
-            f"✅ <b>Directory Changed</b>\n\n"
-            f"📂 Current directory: <code>{relative_display}</code>"
+            f"✅ <b>目录已切换</b>\n\n"
+            f"📂 当前目录: <code>{relative_display}</code>"
             f"{resumed_session_info}",
             parse_mode="HTML",
         )
@@ -725,7 +725,7 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await audit_logger.log_command(user_id, "cd", [target_path], True)
 
     except Exception as e:
-        error_msg = f"❌ <b>Error changing directory</b>\n\n{str(e)}"
+        error_msg = f"❌ <b>切换目录出错</b>\n\n{str(e)}"
         await update.message.reply_text(error_msg, parse_mode="HTML")
 
         # Log failed command
@@ -750,16 +750,16 @@ async def print_working_directory(
     # Add quick navigation buttons
     keyboard = [
         [
-            InlineKeyboardButton("📁 List Files", callback_data="action:ls"),
-            InlineKeyboardButton("📋 Projects", callback_data="action:show_projects"),
+            InlineKeyboardButton("📁 列出文件", callback_data="action:ls"),
+            InlineKeyboardButton("📋 项目", callback_data="action:show_projects"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"📍 <b>Current Directory</b>\n\n"
-        f"Relative: <code>{relative_path}/</code>\n"
-        f"Absolute: <code>{absolute_path}</code>",
+        f"📍 <b>当前目录</b>\n\n"
+        f"相对路径: <code>{relative_path}/</code>\n"
+        f"绝对路径: <code>{absolute_path}</code>",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -777,7 +777,7 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 registry = manager.registry
             if not registry:
                 await update.message.reply_text(
-                    "❌ <b>Project registry is not initialized.</b>",
+                    "❌ <b>项目注册表未初始化。</b>",
                     parse_mode="HTML",
                 )
                 return
@@ -785,8 +785,8 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             projects = registry.list_enabled()
             if not projects:
                 await update.message.reply_text(
-                    "📁 <b>No Projects Found</b>\n\n"
-                    "No enabled projects found in projects config.",
+                    "📁 <b>未找到项目</b>\n\n"
+                    "项目配置中没有已启用的项目。",
                     parse_mode="HTML",
                 )
                 return
@@ -801,7 +801,7 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
 
             await update.message.reply_text(
-                f"📁 <b>Configured Projects</b>\n\n{project_list}",
+                f"📁 <b>已配置项目</b>\n\n{project_list}",
                 parse_mode="HTML",
             )
             return
@@ -814,9 +814,9 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         if not projects:
             await update.message.reply_text(
-                "📁 <b>No Projects Found</b>\n\n"
-                "No subdirectories found in your approved directory.\n"
-                "Create some directories to organize your projects!"
+                "📁 <b>未找到项目</b>\n\n"
+                "授权目录中没有子目录。\n"
+                "创建一些目录来组织你的项目吧!"
             )
             return
 
@@ -837,9 +837,9 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Add navigation buttons
         keyboard.append(
             [
-                InlineKeyboardButton("🏠 Go to Root", callback_data="cd:/"),
+                InlineKeyboardButton("🏠 返回根目录", callback_data="cd:/"),
                 InlineKeyboardButton(
-                    "🔄 Refresh", callback_data="action:show_projects"
+                    "🔄 刷新", callback_data="action:show_projects"
                 ),
             ]
         )
@@ -849,15 +849,15 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         project_list = "\n".join([f"• <code>{project}/</code>" for project in projects])
 
         await update.message.reply_text(
-            f"📁 <b>Available Projects</b>\n\n"
+            f"📁 <b>可用项目</b>\n\n"
             f"{project_list}\n\n"
-            f"Click a project below to navigate to it:",
+            f"点击下方项目即可进入:",
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Error loading projects: {str(e)}")
+        await update.message.reply_text(f"❌ 加载项目时出错: {str(e)}")
         logger.error("Error in show_projects command", error=str(e))
 
 
@@ -884,9 +884,9 @@ async def session_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             cost_limit = cost_usage.get("limit", settings.claude_max_cost_per_user)
             cost_percentage = (current_cost / cost_limit) * 100 if cost_limit > 0 else 0
 
-            usage_info = f"💰 Usage: ${current_cost:.2f} / ${cost_limit:.2f} ({cost_percentage:.0f}%)\n"
+            usage_info = f"💰 用量: ${current_cost:.2f} / ${cost_limit:.2f} ({cost_percentage:.0f}%)\n"
         except Exception:
-            usage_info = "💰 Usage: <i>Unable to retrieve</i>\n"
+            usage_info = "💰 用量: <i>无法获取</i>\n"
 
     # Check if there's a resumable session from the database
     resumable_info = ""
@@ -900,34 +900,34 @@ async def session_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             if existing:
                 resumable_info = (
-                    f"🔄 Resumable: <code>{existing.session_id}</code> "
-                    f"({existing.message_count} msgs)"
+                    f"🔄 可恢复: <code>{existing.session_id}</code> "
+                    f"({existing.message_count} 条消息)"
                 )
 
     # Format status message
     status_lines = [
-        "📊 <b>Session Status</b>",
+        "📊 <b>Session 状态</b>",
         "",
-        f"📂 Directory: <code>{relative_path}/</code>",
-        f"🤖 Claude Session: {'✅ Active' if claude_session_id else '❌ None'}",
+        f"📂 目录: <code>{relative_path}/</code>",
+        f"🤖 Claude Session: {'✅ 活跃' if claude_session_id else '❌ 无'}",
         usage_info.rstrip(),
-        f"🕐 Last Update: {update.message.date.strftime('%H:%M:%S UTC')}",
+        f"🕐 最后更新: {update.message.date.strftime('%H:%M:%S UTC')}",
     ]
 
     if claude_session_id:
         status_lines.append(f"🆔 Session ID: <code>{claude_session_id}</code>")
     elif resumable_info:
         status_lines.append(resumable_info)
-        status_lines.append("💡 Session will auto-resume on your next message")
+        status_lines.append("💡 下次发消息时将自动恢复 session")
 
     # Add action buttons
     keyboard = []
     if claude_session_id:
         keyboard.append(
             [
-                InlineKeyboardButton("🔄 Continue", callback_data="action:continue"),
+                InlineKeyboardButton("🔄 继续", callback_data="action:continue"),
                 InlineKeyboardButton(
-                    "🆕 New Session", callback_data="action:new_session"
+                    "🆕 新建 Session", callback_data="action:new_session"
                 ),
             ]
         )
@@ -935,15 +935,15 @@ async def session_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    "🆕 Start Session", callback_data="action:new_session"
+                    "🆕 开始 Session", callback_data="action:new_session"
                 )
             ]
         )
 
     keyboard.append(
         [
-            InlineKeyboardButton("📤 Export", callback_data="action:export"),
-            InlineKeyboardButton("🔄 Refresh", callback_data="action:refresh_status"),
+            InlineKeyboardButton("📤 导出", callback_data="action:export"),
+            InlineKeyboardButton("🔄 刷新", callback_data="action:refresh_status"),
         ]
     )
 
@@ -964,13 +964,13 @@ async def export_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not session_exporter:
         await update.message.reply_text(
-            "📤 <b>Export Session</b>\n\n"
-            "Session export functionality is not available.\n\n"
-            "<b>Planned features:</b>\n"
-            "• Export conversation history\n"
-            "• Save session state\n"
-            "• Share conversations\n"
-            "• Create session backups"
+            "📤 <b>导出 Session</b>\n\n"
+            "Session 导出功能暂不可用。\n\n"
+            "<b>计划功能:</b>\n"
+            "• 导出对话历史\n"
+            "• 保存 session 状态\n"
+            "• 分享对话\n"
+            "• 创建 session 备份"
         )
         return
 
@@ -979,12 +979,12 @@ async def export_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     if not claude_session_id:
         await update.message.reply_text(
-            "❌ <b>No Active Session</b>\n\n"
-            "There's no active Claude session to export.\n\n"
-            "<b>What you can do:</b>\n"
-            "• Start a new session with <code>/new</code>\n"
-            "• Continue an existing session with <code>/continue</code>\n"
-            "• Check your status with <code>/status</code>"
+            "❌ <b>无活跃 Session</b>\n\n"
+            "没有可导出的活跃 Claude session。\n\n"
+            "<b>你可以:</b>\n"
+            "• 使用 <code>/new</code> 开始新 session\n"
+            "• 使用 <code>/continue</code> 继续现有 session\n"
+            "• 使用 <code>/status</code> 查看状态"
         )
         return
 
@@ -996,15 +996,15 @@ async def export_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         ],
         [
             InlineKeyboardButton("📋 JSON", callback_data="export:json"),
-            InlineKeyboardButton("❌ Cancel", callback_data="export:cancel"),
+            InlineKeyboardButton("❌ 取消", callback_data="export:cancel"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "📤 <b>Export Session</b>\n\n"
-        f"Ready to export session: <code>{claude_session_id}</code>\n\n"
-        "<b>Choose export format:</b>",
+        "📤 <b>导出 Session</b>\n\n"
+        f"准备导出 session: <code>{claude_session_id}</code>\n\n"
+        "<b>选择导出格式:</b>",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -1020,12 +1020,12 @@ async def end_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not claude_session_id:
         await update.message.reply_text(
-            "ℹ️ <b>No Active Session</b>\n\n"
-            "There's no active Claude session to end.\n\n"
-            "<b>What you can do:</b>\n"
-            "• Use <code>/new</code> to start a new session\n"
-            "• Use <code>/status</code> to check your session status\n"
-            "• Send any message to start a conversation"
+            "ℹ️ <b>无活跃 Session</b>\n\n"
+            "没有可结束的活跃 Claude session。\n\n"
+            "<b>你可以:</b>\n"
+            "• 使用 <code>/new</code> 开始新 session\n"
+            "• 使用 <code>/status</code> 查看 session 状态\n"
+            "• 发送任意消息开始对话"
         )
         return
 
@@ -1043,29 +1043,29 @@ async def end_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Create quick action buttons
     keyboard = [
         [
-            InlineKeyboardButton("🆕 New Session", callback_data="action:new_session"),
+            InlineKeyboardButton("🆕 新建 Session", callback_data="action:new_session"),
             InlineKeyboardButton(
-                "📁 Change Project", callback_data="action:show_projects"
+                "📁 切换项目", callback_data="action:show_projects"
             ),
         ],
         [
-            InlineKeyboardButton("📊 Status", callback_data="action:status"),
-            InlineKeyboardButton("❓ Help", callback_data="action:help"),
+            InlineKeyboardButton("📊 状态", callback_data="action:status"),
+            InlineKeyboardButton("❓ 帮助", callback_data="action:help"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        "✅ <b>Session Ended</b>\n\n"
-        f"Your Claude session has been terminated.\n\n"
-        f"<b>Current Status:</b>\n"
-        f"• Directory: <code>{relative_path}/</code>\n"
-        f"• Session: None\n"
-        f"• Ready for new commands\n\n"
-        f"<b>Next Steps:</b>\n"
-        f"• Start a new session with <code>/new</code>\n"
-        f"• Check status with <code>/status</code>\n"
-        f"• Send any message to begin a new conversation",
+        "✅ <b>Session 已结束</b>\n\n"
+        f"你的 Claude session 已终止。\n\n"
+        f"<b>当前状态:</b>\n"
+        f"• 目录: <code>{relative_path}/</code>\n"
+        f"• Session: 无\n"
+        f"• 可接受新命令\n\n"
+        f"<b>下一步:</b>\n"
+        f"• 使用 <code>/new</code> 开始新 session\n"
+        f"• 使用 <code>/status</code> 查看状态\n"
+        f"• 发送任意消息开始新对话",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -1081,9 +1081,9 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if not features or not features.is_enabled("quick_actions"):
         await update.message.reply_text(
-            "❌ <b>Quick Actions Disabled</b>\n\n"
-            "Quick actions feature is not enabled.\n"
-            "Contact your administrator to enable this feature."
+            "❌ <b>快捷操作已禁用</b>\n\n"
+            "快捷操作功能未启用。\n"
+            "请联系管理员启用此功能。"
         )
         return
 
@@ -1096,8 +1096,8 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         quick_action_manager = features.get_quick_actions()
         if not quick_action_manager:
             await update.message.reply_text(
-                "❌ <b>Quick Actions Unavailable</b>\n\n"
-                "Quick actions service is not available."
+                "❌ <b>快捷操作不可用</b>\n\n"
+                "快捷操作服务不可用。"
             )
             return
 
@@ -1115,12 +1115,12 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         if not actions:
             await update.message.reply_text(
-                "🤖 <b>No Actions Available</b>\n\n"
-                "No quick actions are available for the current context.\n\n"
-                "<b>Try:</b>\n"
-                "• Navigating to a project directory with <code>/cd</code>\n"
-                "• Creating some code files\n"
-                "• Starting a Claude session with <code>/new</code>"
+                "🤖 <b>无可用操作</b>\n\n"
+                "当前上下文没有可用的快捷操作。\n\n"
+                "<b>试试:</b>\n"
+                "• 使用 <code>/cd</code> 进入项目目录\n"
+                "• 创建一些代码文件\n"
+                "• 使用 <code>/new</code> 开始 Claude session"
             )
             return
 
@@ -1129,15 +1129,15 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         relative_path = current_dir.relative_to(settings.approved_directory)
         await update.message.reply_text(
-            f"⚡ <b>Quick Actions</b>\n\n"
-            f"📂 Context: <code>{relative_path}/</code>\n\n"
-            f"Select an action to execute:",
+            f"⚡ <b>快捷操作</b>\n\n"
+            f"📂 上下文: <code>{relative_path}/</code>\n\n"
+            f"选择要执行的操作:",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
 
     except Exception as e:
-        await update.message.reply_text(f"❌ <b>Error Loading Actions</b>\n\n{str(e)}")
+        await update.message.reply_text(f"❌ <b>加载操作出错</b>\n\n{str(e)}")
         logger.error("Error in quick_actions command", error=str(e), user_id=user_id)
 
 
@@ -1149,9 +1149,9 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not features or not features.is_enabled("git"):
         await update.message.reply_text(
-            "❌ <b>Git Integration Disabled</b>\n\n"
-            "Git integration feature is not enabled.\n"
-            "Contact your administrator to enable this feature."
+            "❌ <b>Git 集成已禁用</b>\n\n"
+            "Git 集成功能未启用。\n"
+            "请联系管理员启用此功能。"
         )
         return
 
@@ -1164,20 +1164,20 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         git_integration = features.get_git_integration()
         if not git_integration:
             await update.message.reply_text(
-                "❌ <b>Git Integration Unavailable</b>\n\n"
-                "Git integration service is not available."
+                "❌ <b>Git 集成不可用</b>\n\n"
+                "Git 集成服务不可用。"
             )
             return
 
         # Check if current directory is a git repository
         if not (current_dir / ".git").exists():
             await update.message.reply_text(
-                f"📂 <b>Not a Git Repository</b>\n\n"
-                f"Current directory <code>{current_dir.relative_to(settings.approved_directory)}/</code> is not a git repository.\n\n"
-                f"<b>Options:</b>\n"
-                f"• Navigate to a git repository with <code>/cd</code>\n"
-                f"• Initialize a new repository (ask Claude to help)\n"
-                f"• Clone an existing repository (ask Claude to help)"
+                f"📂 <b>不是 Git 仓库</b>\n\n"
+                f"当前目录 <code>{current_dir.relative_to(settings.approved_directory)}/</code> 不是 git 仓库。\n\n"
+                f"<b>选项:</b>\n"
+                f"• 使用 <code>/cd</code> 进入 git 仓库\n"
+                f"• 初始化新仓库 (让 Claude 帮忙)\n"
+                f"• 克隆现有仓库 (让 Claude 帮忙)"
             )
             return
 
@@ -1186,38 +1186,38 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         # Format status message
         relative_path = current_dir.relative_to(settings.approved_directory)
-        status_message = "🔗 <b>Git Repository Status</b>\n\n"
-        status_message += f"📂 Directory: <code>{relative_path}/</code>\n"
-        status_message += f"🌿 Branch: <code>{git_status.branch}</code>\n"
+        status_message = "🔗 <b>Git 仓库状态</b>\n\n"
+        status_message += f"📂 目录: <code>{relative_path}/</code>\n"
+        status_message += f"🌿 分支: <code>{git_status.branch}</code>\n"
 
         if git_status.ahead > 0:
-            status_message += f"⬆️ Ahead: {git_status.ahead} commits\n"
+            status_message += f"⬆️ 领先: {git_status.ahead} 个提交\n"
         if git_status.behind > 0:
-            status_message += f"⬇️ Behind: {git_status.behind} commits\n"
+            status_message += f"⬇️ 落后: {git_status.behind} 个提交\n"
 
         # Show file changes
         if not git_status.is_clean:
-            status_message += "\n<b>Changes:</b>\n"
+            status_message += "\n<b>变更:</b>\n"
             if git_status.modified:
-                status_message += f"📝 Modified: {len(git_status.modified)} files\n"
+                status_message += f"📝 已修改: {len(git_status.modified)} 个文件\n"
             if git_status.added:
-                status_message += f"➕ Added: {len(git_status.added)} files\n"
+                status_message += f"➕ 已添加: {len(git_status.added)} 个文件\n"
             if git_status.deleted:
-                status_message += f"➖ Deleted: {len(git_status.deleted)} files\n"
+                status_message += f"➖ 已删除: {len(git_status.deleted)} 个文件\n"
             if git_status.untracked:
-                status_message += f"❓ Untracked: {len(git_status.untracked)} files\n"
+                status_message += f"❓ 未跟踪: {len(git_status.untracked)} 个文件\n"
         else:
-            status_message += "\n✅ Working directory clean\n"
+            status_message += "\n✅ 工作目录干净\n"
 
         # Create action buttons
         keyboard = [
             [
-                InlineKeyboardButton("📊 Show Diff", callback_data="git:diff"),
-                InlineKeyboardButton("📜 Show Log", callback_data="git:log"),
+                InlineKeyboardButton("📊 查看 Diff", callback_data="git:diff"),
+                InlineKeyboardButton("📜 查看日志", callback_data="git:log"),
             ],
             [
-                InlineKeyboardButton("🔄 Refresh", callback_data="git:status"),
-                InlineKeyboardButton("📁 Files", callback_data="action:ls"),
+                InlineKeyboardButton("🔄 刷新", callback_data="git:status"),
+                InlineKeyboardButton("📁 文件", callback_data="action:ls"),
             ],
         ]
 
@@ -1228,7 +1228,7 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
 
     except Exception as e:
-        await update.message.reply_text(f"❌ <b>Git Error</b>\n\n{str(e)}")
+        await update.message.reply_text(f"❌ <b>Git 错误</b>\n\n{str(e)}")
         logger.error("Error in git_command", error=str(e), user_id=user_id)
 
 
@@ -1247,7 +1247,7 @@ async def provider_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Handle /provider command — list or switch API providers."""
     pm = context.bot_data.get("provider_manager")
     if not pm:
-        await update.message.reply_text("Provider manager not available.")
+        await update.message.reply_text("Provider 管理器不可用。")
         return
 
     args = update.message.text.split()[1:] if update.message.text else []
@@ -1256,7 +1256,7 @@ async def provider_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         profiles = pm.list_profiles()
         active_name = pm.get_active_name() or "none"
         model = pm.get_effective_model() or "default"
-        lines = [f"<b>Provider:</b> {active_name}  ·  <b>Model:</b> {model}"]
+        lines = [f"<b>Provider:</b> {active_name}  ·  <b>模型:</b> {model}"]
         for p in profiles:
             marker = "➡️ " if p.name == active_name else "  "
             lines.append(f"{marker}<code>{p.name}</code>")
@@ -1270,8 +1270,8 @@ async def provider_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         profile = pm.switch_profile(name)
         model = pm.get_effective_model() or "default"
         await update.message.reply_text(
-            f"Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
-            f"Takes effect on next request.",
+            f"已切换到 <b>{profile.name}</b>  ·  模型: <code>{model}</code>\n"
+            f"下次请求时生效。",
             parse_mode="HTML",
         )
     except KeyError as e:
@@ -1287,7 +1287,7 @@ async def handle_provider_callback(
 
     pm = context.bot_data.get("provider_manager")
     if not pm:
-        await query.edit_message_text("Provider manager not available.")
+        await query.edit_message_text("Provider 管理器不可用。")
         return
 
     data = query.data  # "provider:<name>"
@@ -1296,8 +1296,8 @@ async def handle_provider_callback(
         profile = pm.switch_profile(name)
         model = pm.get_effective_model() or "default"
         await query.edit_message_text(
-            f"✅ Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
-            f"Takes effect on next request.",
+            f"✅ 已切换到 <b>{profile.name}</b>  ·  模型: <code>{model}</code>\n"
+            f"下次请求时生效。",
             parse_mode="HTML",
         )
     except KeyError as e:
@@ -1310,7 +1310,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     pm = context.bot_data.get("provider_manager")
     if not pm:
-        await update.message.reply_text("Provider manager not available.")
+        await update.message.reply_text("Provider 管理器不可用。")
         return
 
     args = update.message.text.split()[1:] if update.message.text else []
@@ -1319,7 +1319,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not args:
         model = pm.get_effective_model() or "default"
         source = pm.get_model_source()
-        lines = [f"Model: <code>{model}</code> ({source})"]
+        lines = [f"模型: <code>{model}</code> ({source})"]
         roles = pm.get_role_models()
         for role in _VALID_ROLES:
             rm = roles.get(role)
@@ -1339,7 +1339,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             pm.set_role_model(role, None)
         model = pm.get_effective_model() or "default"
         await update.message.reply_text(
-            f"All overrides cleared. Using: <code>{model}</code>", parse_mode="HTML"
+            f"所有覆盖已清除。使用: <code>{model}</code>", parse_mode="HTML"
         )
         return
 
@@ -1347,19 +1347,19 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     role = pm.resolve_role(first)
     if role:
         if len(args) < 2:
-            await update.message.reply_text(f"Usage: /model {first} <model|reset>")
+            await update.message.reply_text(f"用法: /model {first} <model|reset>")
             return
         value = args[1].strip()
         if value.lower() == "reset":
             pm.set_role_model(role, None)
             await update.message.reply_text(
-                f"Cleared <b>{role}</b> role model.", parse_mode="HTML"
+                f"已清除 <b>{role}</b> 角色模型。", parse_mode="HTML"
             )
         else:
             pm.set_role_model(role, value)
             await update.message.reply_text(
-                f"<b>{role}</b> role model set to: <code>{value}</code>\n"
-                f"Takes effect on next request.",
+                f"<b>{role}</b> 角色模型已设置为: <code>{value}</code>\n"
+                f"下次请求时生效。",
                 parse_mode="HTML",
             )
         return
@@ -1367,9 +1367,9 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # /model <name>: set default model override
     pm.set_model_override(first)
     await update.message.reply_text(
-        f"Model override set: <code>{first}</code>\n"
+        f"模型覆盖已设置: <code>{first}</code>\n"
         f"Provider: {pm.get_active_name() or 'default'}\n"
-        f"Takes effect on next request.",
+        f"下次请求时生效。",
         parse_mode="HTML",
     )
 
@@ -1420,7 +1420,7 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = update.effective_user.id
 
     await update.message.reply_text(
-        "🔄 <b>Restarting bot…</b>\n\nBack shortly.",
+        "🔄 <b>正在重启机器人...</b>\n\n马上回来。",
         parse_mode="HTML",
     )
 

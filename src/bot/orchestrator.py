@@ -187,8 +187,8 @@ class MessageOrchestrator:
         if manager is None:
             await self._reject_for_thread_mode(
                 update,
-                "❌ <b>Project Thread Mode Misconfigured</b>\n\n"
-                "Thread manager is not initialized.",
+                "❌ <b>项目话题模式配置错误</b>\n\n"
+                "话题管理器未初始化。",
             )
             return False
 
@@ -626,8 +626,8 @@ class MessageOrchestrator:
                 or getattr(update.effective_chat, "type", "") != "private"
             ):
                 await update.message.reply_text(
-                    "🚫 <b>Private Topics Mode</b>\n\n"
-                    "Use this bot in a private chat and run <code>/start</code> there.",
+                    "🚫 <b>私有话题模式</b>\n\n"
+                    "请在私聊中使用此机器人，并在私聊中运行 <code>/start</code>。",
                     parse_mode="HTML",
                 )
                 return
@@ -639,8 +639,8 @@ class MessageOrchestrator:
                         chat_id=update.effective_chat.id,
                     )
                     sync_line = (
-                        "\n\n🧵 Topics synced"
-                        f" (created {result.created}, reused {result.reused})."
+                        "\n\n🧵 话题已同步"
+                        f"（新建 {result.created}，复用 {result.reused}）。"
                     )
                 except PrivateTopicsUnavailableError:
                     await update.message.reply_text(
@@ -649,7 +649,7 @@ class MessageOrchestrator:
                     )
                     return
                 except Exception:
-                    sync_line = "\n\n🧵 Topic sync failed. Run /sync_threads to retry."
+                    sync_line = "\n\n🧵 话题同步失败，运行 /sync_threads 重试。"
         current_dir = context.user_data.get(
             "current_directory", self.settings.approved_directory
         )
@@ -657,10 +657,10 @@ class MessageOrchestrator:
 
         safe_name = escape_html(user.first_name)
         await update.message.reply_text(
-            f"Hi {safe_name}! I'm your AI coding assistant.\n"
-            f"Just tell me what you need — I can read, write, and run code.\n\n"
-            f"Working in: {dir_display}\n"
-            f"Commands: /new (reset) · /status"
+            f"你好 {safe_name}！我是你的 AI 编程助手。\n"
+            f"直接告诉我你的需求，我可以读写和运行代码。\n\n"
+            f"工作目录：{dir_display}\n"
+            f"命令：/new（重置）· /status"
             f"{sync_line}",
             parse_mode="HTML",
         )
@@ -673,7 +673,7 @@ class MessageOrchestrator:
         context.user_data["session_started"] = True
         context.user_data["force_new_session"] = True
 
-        await update.message.reply_text("Session reset. What's next?")
+        await update.message.reply_text("会话已重置，请继续。")
 
     def _build_provider_keyboard(
         self, pm: Any
@@ -693,7 +693,7 @@ class MessageOrchestrator:
         """List or switch API providers."""
         pm = context.bot_data.get("provider_manager")
         if not pm:
-            await update.message.reply_text("Provider manager not available.")
+            await update.message.reply_text("Provider 管理器不可用。")
             return
 
         args = update.message.text.split()[1:] if update.message.text else []
@@ -702,7 +702,7 @@ class MessageOrchestrator:
             profiles = pm.list_profiles()
             active_name = pm.get_active_name() or "none"
             model = pm.get_effective_model() or "default"
-            lines = [f"<b>Provider:</b> {active_name}  ·  <b>Model:</b> {model}"]
+            lines = [f"<b>Provider：</b>{active_name}  ·  <b>模型：</b>{model}"]
             for p in profiles:
                 marker = "➡️ " if p.name == active_name else "  "
                 lines.append(f"{marker}<code>{p.name}</code>")
@@ -717,8 +717,8 @@ class MessageOrchestrator:
             profile = pm.switch_profile(name)
             model = pm.get_effective_model() or "default"
             await update.message.reply_text(
-                f"Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
-                f"Takes effect on next request.",
+                f"已切换到 <b>{profile.name}</b>  ·  模型：<code>{model}</code>\n"
+                f"下次请求时生效。",
                 parse_mode="HTML",
             )
         except KeyError as e:
@@ -733,7 +733,7 @@ class MessageOrchestrator:
 
         pm = context.bot_data.get("provider_manager")
         if not pm:
-            await query.edit_message_text("Provider manager not available.")
+            await query.edit_message_text("Provider 管理器不可用。")
             return
 
         data = query.data  # "provider:<name>"
@@ -742,8 +742,8 @@ class MessageOrchestrator:
             profile = pm.switch_profile(name)
             model = pm.get_effective_model() or "default"
             await query.edit_message_text(
-                f"✅ Switched to <b>{profile.name}</b>  ·  Model: <code>{model}</code>\n"
-                f"Takes effect on next request.",
+                f"✅ 已切换到 <b>{profile.name}</b>  ·  模型：<code>{model}</code>\n"
+                f"下次请求时生效。",
                 parse_mode="HTML",
             )
         except KeyError as e:
@@ -757,7 +757,7 @@ class MessageOrchestrator:
 
         pm = context.bot_data.get("provider_manager")
         if not pm:
-            await update.message.reply_text("Provider manager not available.")
+            await update.message.reply_text("Provider 管理器不可用。")
             return
 
         args = update.message.text.split()[1:] if update.message.text else []
@@ -797,7 +797,7 @@ class MessageOrchestrator:
                 pm.set_role_model(role, None)
             model = pm.get_effective_model() or "default"
             await update.message.reply_text(
-                f"All overrides cleared. Using: <code>{model}</code>", parse_mode="HTML"
+                f"已清除所有覆盖，当前模型：<code>{model}</code>", parse_mode="HTML"
             )
             return
 
@@ -817,7 +817,7 @@ class MessageOrchestrator:
                 pm.set_role_model(role, value)
                 await update.message.reply_text(
                     f"<b>{role}</b> 角色模型设置为: <code>{value}</code>\n"
-                    f"Takes effect on next request.",
+                    f"下次请求时生效。",
                     parse_mode="HTML",
                 )
             return
@@ -825,9 +825,9 @@ class MessageOrchestrator:
         # ── /model <name>: set default model override ───────────
         pm.set_model_override(first)
         await update.message.reply_text(
-            f"Model override set: <code>{first}</code>\n"
-            f"Provider: {pm.get_active_name() or 'default'}\n"
-            f"Takes effect on next request.",
+            f"模型覆盖已设置：<code>{first}</code>\n"
+            f"Provider：{pm.get_active_name() or 'default'}\n"
+            f"下次请求时生效。",
             parse_mode="HTML",
         )
 
@@ -999,7 +999,7 @@ class MessageOrchestrator:
             )
         except Exception as e:
             logger.error("agentic_status_error", error=str(e))
-            await update.message.reply_text(f"Status error: {e}")
+            await update.message.reply_text(f"状态查询出错：{e}")
 
     def _get_verbose_level(self, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Return effective verbose level: per-user override or global default."""
@@ -1015,13 +1015,13 @@ class MessageOrchestrator:
         args = update.message.text.split()[1:] if update.message.text else []
         if not args:
             current = self._get_verbose_level(context)
-            labels = {0: "quiet", 1: "normal", 2: "detailed"}
+            labels = {0: "静默", 1: "正常", 2: "详细"}
             await update.message.reply_text(
-                f"Verbosity: <b>{current}</b> ({labels.get(current, '?')})\n\n"
-                "Usage: <code>/verbose 0|1|2</code>\n"
-                "  0 = quiet (final response only)\n"
-                "  1 = normal (tools + reasoning)\n"
-                "  2 = detailed (tools with inputs + reasoning)",
+                f"输出详细度：<b>{current}</b>（{labels.get(current, '?')}）\n\n"
+                "用法：<code>/verbose 0|1|2</code>\n"
+                "  0 = 静默（仅最终回复）\n"
+                "  1 = 正常（工具名 + 推理摘要）\n"
+                "  2 = 详细（工具输入 + 完整推理）",
                 parse_mode="HTML",
             )
             return
@@ -1032,14 +1032,14 @@ class MessageOrchestrator:
                 raise ValueError
         except ValueError:
             await update.message.reply_text(
-                "Please use: /verbose 0, /verbose 1, or /verbose 2"
+                "请使用：/verbose 0、/verbose 1 或 /verbose 2"
             )
             return
 
         context.user_data["verbose_level"] = level
-        labels = {0: "quiet", 1: "normal", 2: "detailed"}
+        labels = {0: "静默", 1: "正常", 2: "详细"}
         await update.message.reply_text(
-            f"Verbosity set to <b>{level}</b> ({labels[level]})",
+            f"输出详细度已设为 <b>{level}</b>（{labels[level]}）",
             parse_mode="HTML",
         )
 
@@ -1051,10 +1051,10 @@ class MessageOrchestrator:
     ) -> str:
         """Build the progress message text based on activity so far."""
         if not activity_log:
-            return "Working..."
+            return "处理中..."
 
         elapsed = time.time() - start_time
-        lines: List[str] = [f"Working... ({elapsed:.0f}s)\n"]
+        lines: List[str] = [f"处理中...（{elapsed:.0f}s）\n"]
 
         for entry in activity_log[-15:]:  # Show last 15 entries max
             kind = entry.get("kind", "tool")
@@ -1075,7 +1075,7 @@ class MessageOrchestrator:
                     lines.append(f"{icon} {entry['name']}")
 
         if len(activity_log) > 15:
-            lines.insert(1, f"... ({len(activity_log) - 15} earlier entries)\n")
+            lines.insert(1, f"...（还有 {len(activity_log) - 15} 条更早的记录）\n")
 
         return "\n".join(lines)
 
@@ -1388,10 +1388,10 @@ class MessageOrchestrator:
         # Create Stop button and interrupt event
         interrupt_event = asyncio.Event()
         stop_kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Stop", callback_data=f"stop:{user_id}")]]
+            [[InlineKeyboardButton("停止", callback_data=f"stop:{user_id}")]]
         )
         progress_msg = await update.message.reply_text(
-            "Working...", reply_markup=stop_kb
+            "处理中...", reply_markup=stop_kb
         )
 
         # Register active request for stop callback
@@ -1406,7 +1406,7 @@ class MessageOrchestrator:
         if not claude_integration:
             self._active_requests.pop(user_id, None)
             await progress_msg.edit_text(
-                "Claude integration not available. Check configuration.",
+                "Claude 集成不可用，请检查配置。",
                 reply_markup=None,
             )
             return
@@ -1508,7 +1508,7 @@ class MessageOrchestrator:
             if claude_response.interrupted:
                 response_content = (
                     response_content or ""
-                ) + "\n\n_(Interrupted by user)_"
+                ) + "\n\n_（用户已中断）_"
 
             formatted_messages = formatter.format_claude_response(response_content)
 
@@ -1572,7 +1572,7 @@ class MessageOrchestrator:
                         await asyncio.sleep(0.5)
                 except Exception as send_err:
                     logger.warning(
-                        "Failed to send HTML response, retrying as plain text",
+                        "发送 HTML 响应失败，尝试纯文本重发",
                         error=str(send_err),
                         message_index=i,
                     )
@@ -1586,9 +1586,9 @@ class MessageOrchestrator:
                         )
                     except Exception as plain_err:
                         await update.message.reply_text(
-                            f"Failed to deliver response "
-                            f"(Telegram error: {str(plain_err)[:150]}). "
-                            f"Please try again.",
+                            f"响应发送失败"
+                            f"（Telegram 错误：{str(plain_err)[:150]}），"
+                            f"请重试。",
                             reply_to_message_id=(
                                 update.message.message_id if i == 0 else None
                             ),
@@ -1633,20 +1633,20 @@ class MessageOrchestrator:
         if security_validator:
             valid, error = security_validator.validate_filename(document.file_name)
             if not valid:
-                await update.message.reply_text(f"File rejected: {error}")
+                await update.message.reply_text(f"文件被拒绝：{error}")
                 return
 
         # Size check
         max_size = 10 * 1024 * 1024
         if document.file_size > max_size:
             await update.message.reply_text(
-                f"File too large ({document.file_size / 1024 / 1024:.1f}MB). Max: 10MB."
+                f"文件过大（{document.file_size / 1024 / 1024:.1f}MB），上限 10MB。"
             )
             return
 
         chat = update.message.chat
         await chat.send_action("typing")
-        progress_msg = await update.message.reply_text("Working...")
+        progress_msg = await update.message.reply_text("处理中...")
 
         # Try enhanced file handler, fall back to basic
         features = context.bot_data.get("features")
@@ -1658,7 +1658,7 @@ class MessageOrchestrator:
                 processed_file = await file_handler.handle_document_upload(
                     document,
                     user_id,
-                    update.message.caption or "Please review this file:",
+                    update.message.caption or "请审查此文件：",
                 )
                 prompt = processed_file.prompt
             except Exception:
@@ -1671,14 +1671,14 @@ class MessageOrchestrator:
                 content = file_bytes.decode("utf-8")
                 if len(content) > 50000:
                     content = content[:50000] + "\n... (truncated)"
-                caption = update.message.caption or "Please review this file:"
+                caption = update.message.caption or "请审查此文件："
                 prompt = (
                     f"{caption}\n\n**File:** `{document.file_name}`\n\n"
                     f"```\n{content}\n```"
                 )
             except UnicodeDecodeError:
                 await progress_msg.edit_text(
-                    "Unsupported file format. Must be text-based (UTF-8)."
+                    "不支持的文件格式，需为文本文件（UTF-8）。"
                 )
                 return
 
@@ -1686,7 +1686,7 @@ class MessageOrchestrator:
         claude_integration = context.bot_data.get("claude_integration")
         if not claude_integration:
             await progress_msg.edit_text(
-                "Claude integration not available. Check configuration."
+                "Claude 集成不可用，请检查配置。"
             )
             return
 
@@ -1809,12 +1809,12 @@ class MessageOrchestrator:
         image_handler = features.get_image_handler() if features else None
 
         if not image_handler:
-            await update.message.reply_text("Photo processing is not available.")
+            await update.message.reply_text("图片处理功能不可用。")
             return
 
         chat = update.message.chat
         await chat.send_action("typing")
-        progress_msg = await update.message.reply_text("Working...")
+        progress_msg = await update.message.reply_text("处理中...")
 
         try:
             photo = update.message.photo[-1]
@@ -1862,7 +1862,7 @@ class MessageOrchestrator:
 
         chat = update.message.chat
         await chat.send_action("typing")
-        progress_msg = await update.message.reply_text("Transcribing...")
+        progress_msg = await update.message.reply_text("转录中...")
 
         try:
             voice = update.message.voice
@@ -1870,7 +1870,7 @@ class MessageOrchestrator:
                 voice, update.message.caption
             )
 
-            await progress_msg.edit_text("Working...")
+            await progress_msg.edit_text("处理中...")
             await self._handle_agentic_media_message(
                 update=update,
                 context=context,
@@ -1903,7 +1903,7 @@ class MessageOrchestrator:
         claude_integration = context.bot_data.get("claude_integration")
         if not claude_integration:
             await progress_msg.edit_text(
-                "Claude integration not available. Check configuration."
+                "Claude 集成不可用，请检查配置。"
             )
             return
 
@@ -2029,15 +2029,15 @@ class MessageOrchestrator:
         """Return provider-aware guidance when voice feature is unavailable."""
         if self.settings.voice_provider == "local":
             return (
-                "Voice processing is not available. "
-                "Ensure whisper.cpp is installed and the model file exists. "
-                "Check WHISPER_CPP_BINARY_PATH and WHISPER_CPP_MODEL_PATH settings."
+                "语音处理功能不可用。"
+                "请确保 whisper.cpp 已安装且模型文件存在，"
+                "检查 WHISPER_CPP_BINARY_PATH 和 WHISPER_CPP_MODEL_PATH 配置。"
             )
         return (
-            "Voice processing is not available. "
-            f"Set {self.settings.voice_provider_api_key_env} "
-            f"for {self.settings.voice_provider_display_name} and install "
-            'voice extras with: pip install "claude-code-telegram[voice]"'
+            "语音处理功能不可用。"
+            f"请设置 {self.settings.voice_provider_api_key_env} "
+            f"（用于 {self.settings.voice_provider_display_name}）并安装语音依赖："
+            'pip install "claude-code-telegram[voice]"'
         )
 
     async def agentic_repo(
@@ -2058,7 +2058,7 @@ class MessageOrchestrator:
             target_path = base / target_name
             if not target_path.is_dir():
                 await update.message.reply_text(
-                    f"Directory not found: <code>{escape_html(target_name)}</code>",
+                    f"目录不存在：<code>{escape_html(target_name)}</code>",
                     parse_mode="HTML",
                 )
                 return
@@ -2083,7 +2083,7 @@ class MessageOrchestrator:
             git_badge = " (git)" if is_git else ""
 
             switch_msg = (
-                f"Switched to <code>{escape_html(target_name)}/</code>"
+                f"已切换到 <code>{escape_html(target_name)}/</code>"
                 f"{git_badge}"
             )
 
@@ -2115,13 +2115,13 @@ class MessageOrchestrator:
                 key=lambda d: d.name,
             )
         except OSError as e:
-            await update.message.reply_text(f"Error reading workspace: {e}")
+            await update.message.reply_text(f"读取工作区出错：{e}")
             return
 
         if not entries:
             await update.message.reply_text(
-                f"No repos in <code>{escape_html(str(base))}</code>.\n"
-                'Clone one by telling me, e.g. <i>"clone org/repo"</i>.',
+                f"<code>{escape_html(str(base))}</code> 中没有项目。\n"
+                '可以告诉我克隆一个，例如 <i>"clone org/repo"</i>。',
                 parse_mode="HTML",
             )
             return
@@ -2148,7 +2148,7 @@ class MessageOrchestrator:
         reply_markup = InlineKeyboardMarkup(keyboard_rows)
 
         await update.message.reply_text(
-            "<b>Repos</b>\n\n" + "\n".join(lines),
+            "<b>项目列表</b>\n\n" + "\n".join(lines),
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
@@ -2163,24 +2163,24 @@ class MessageOrchestrator:
         # Only the requesting user can stop their own request
         if query.from_user.id != target_user_id:
             await query.answer(
-                "Only the requesting user can stop this.", show_alert=True
+                "只有发起请求的用户才能停止。", show_alert=True
             )
             return
 
         active = self._active_requests.get(target_user_id)
         if not active:
-            await query.answer("Already completed.", show_alert=False)
+            await query.answer("已完成。", show_alert=False)
             return
         if active.interrupted:
-            await query.answer("Already stopping...", show_alert=False)
+            await query.answer("正在停止...", show_alert=False)
             return
 
         active.interrupt_event.set()
         active.interrupted = True
-        await query.answer("Stopping...", show_alert=False)
+        await query.answer("正在停止...", show_alert=False)
 
         try:
-            await active.progress_msg.edit_text("Stopping...", reply_markup=None)
+            await active.progress_msg.edit_text("正在停止...", reply_markup=None)
         except Exception:
             pass
 
@@ -2339,7 +2339,7 @@ class MessageOrchestrator:
 
             row: List[InlineKeyboardButton] = []
             for idx, opt in enumerate(options[:4]):
-                label = opt.get("label", f"Option {idx + 1}")
+                label = opt.get("label", f"选项 {idx + 1}")
                 btn_text = f"☐ {label}"
                 row.append(
                     InlineKeyboardButton(
@@ -2363,7 +2363,7 @@ class MessageOrchestrator:
             )
         else:
             for idx, opt in enumerate(options[:4]):
-                label = opt.get("label", f"Option {idx + 1}")
+                label = opt.get("label", f"选项 {idx + 1}")
                 desc = opt.get("description", "")
                 btn_text = f"{label}" + (f" — {desc}" if desc else "")
                 # Truncate button text to ~50 chars for readability
@@ -2420,7 +2420,7 @@ class MessageOrchestrator:
 
         parts = data.split(":", 2)
         if len(parts) != 3:
-            await query.answer("Invalid callback data.", show_alert=True)
+            await query.answer("无效的回调数据。", show_alert=True)
             return
 
         _, tid_short, action = parts
@@ -2428,20 +2428,20 @@ class MessageOrchestrator:
         # Look up stored metadata
         auq_meta = getattr(self, "_auq_messages", {}).get(tid_short)
         if not auq_meta:
-            await query.answer("This question has expired.", show_alert=False)
+            await query.answer("此问题已过期。", show_alert=False)
             return
 
         # Only the original user can answer
         if query.from_user.id != auq_meta["user_id"]:
             await query.answer(
-                "Only the original user can answer this.", show_alert=True
+                "只有原始用户才能回答此问题。", show_alert=True
             )
             return
 
         tool_use_id = auq_meta["tool_use_id"]
         future = self._pending_auq.get(tool_use_id)
         if not future or future.done():
-            await query.answer("Already answered.", show_alert=False)
+            await query.answer("已回答。", show_alert=False)
             return
 
         options = auq_meta["options"]
@@ -2479,7 +2479,7 @@ class MessageOrchestrator:
                     tool_use_id, []
                 )
                 selected = [
-                    options[i].get("label", f"Option {i + 1}")
+                    options[i].get("label", f"选项 {i + 1}")
                     for i in range(min(len(options), 4))
                     if i < len(states) and states[i]
                 ]
@@ -2511,7 +2511,7 @@ class MessageOrchestrator:
                 # Toggle a single option
                 idx = int(action)
                 if idx < 0 or idx >= min(len(options), 4):
-                    await query.answer("Invalid option.", show_alert=True)
+                    await query.answer("无效选项。", show_alert=True)
                     return
 
                 states = getattr(self, "_auq_multi_state", {}).get(
@@ -2524,7 +2524,7 @@ class MessageOrchestrator:
                 buttons: List[List[InlineKeyboardButton]] = []
                 row: List[InlineKeyboardButton] = []
                 for i, opt in enumerate(options[:4]):
-                    label = opt.get("label", f"Option {i + 1}")
+                    label = opt.get("label", f"选项 {i + 1}")
                     checked = (
                         "☑" if i < len(states) and states[i] else "☐"
                     )
@@ -2559,10 +2559,10 @@ class MessageOrchestrator:
             # Single select — immediate answer
             idx = int(action)
             if idx < 0 or idx >= min(len(options), 4):
-                await query.answer("Invalid option.", show_alert=True)
+                await query.answer("无效选项。", show_alert=True)
                 return
 
-            selected_label = options[idx].get("label", f"Option {idx + 1}")
+            selected_label = options[idx].get("label", f"选项 {idx + 1}")
             future.set_result({"selected": [selected_label]})
 
             # Edit message to show result
@@ -2590,7 +2590,7 @@ class MessageOrchestrator:
 
         if not new_path.is_dir():
             await query.edit_message_text(
-                f"Directory not found: <code>{escape_html(project_name)}</code>",
+                f"目录不存在：<code>{escape_html(project_name)}</code>",
                 parse_mode="HTML",
             )
             return
@@ -2615,7 +2615,7 @@ class MessageOrchestrator:
         git_badge = " (git)" if is_git else ""
 
         switch_msg = (
-            f"Switched to <code>{escape_html(project_name)}/</code>"
+            f"已切换到 <code>{escape_html(project_name)}/</code>"
             f"{git_badge}"
         )
 

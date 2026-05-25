@@ -244,7 +244,7 @@ async def test_agentic_new_resets_session(agentic_settings, deps):
     await orchestrator.agentic_new(update, context)
 
     assert context.user_data["claude_session_id"] is None
-    update.message.reply_text.assert_called_once_with("Session reset. What's next?")
+    update.message.reply_text.assert_called_once_with("会话已重置，请继续。")
 
 
 async def test_agentic_status_compact(agentic_settings, deps):
@@ -364,7 +364,7 @@ async def test_agentic_document_rejects_large_files(agentic_settings, deps):
     await orchestrator.agentic_document(update, context)
 
     call_args = update.message.reply_text.call_args
-    assert "too large" in call_args.args[0].lower()
+    assert "过大" in call_args.args[0]
 
 
 async def test_agentic_voice_calls_claude(agentic_settings, deps):

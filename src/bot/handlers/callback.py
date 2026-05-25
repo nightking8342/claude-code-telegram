@@ -154,9 +154,9 @@ async def handle_callback_query(
             await handler(query, param, context)
         else:
             await query.edit_message_text(
-                "❌ <b>Unknown Action</b>\n\n"
-                "This button action is not recognized. "
-                "The bot may have been updated since this message was sent.",
+                "❌ <b>未知操作</b>\n\n"
+                "无法识别此按钮操作，"
+                "可能是因为机器人在该消息发送后已更新。",
                 parse_mode="HTML",
             )
 
@@ -170,16 +170,16 @@ async def handle_callback_query(
 
         try:
             await query.edit_message_text(
-                "❌ <b>Error Processing Action</b>\n\n"
-                "An error occurred while processing your request.\n"
-                "Please try again or use text commands.",
+                "❌ <b>操作处理出错</b>\n\n"
+                "处理请求时发生错误。\n"
+                "请重试或使用文本命令。",
                 parse_mode="HTML",
             )
         except Exception:
             # If we can't edit the message, send a new one
             await query.message.reply_text(
-                "❌ <b>Error Processing Action</b>\n\n"
-                "An error occurred while processing your request.",
+                "❌ <b>操作处理出错</b>\n\n"
+                "处理请求时发生错误。",
                 parse_mode="HTML",
             )
 
@@ -222,7 +222,7 @@ async def handle_cd_callback(
             )
             if not valid:
                 await query.edit_message_text(
-                    f"❌ <b>Access Denied</b>\n\n{escape_html(error)}",
+                    f"❌ <b>访问被拒绝</b>\n\n{escape_html(error)}",
                     parse_mode="HTML",
                 )
                 return
@@ -231,8 +231,8 @@ async def handle_cd_callback(
 
         if project_root and not _is_within_root(new_path, project_root):
             await query.edit_message_text(
-                "❌ <b>Access Denied</b>\n\n"
-                "In thread mode, navigation is limited to the current project root.",
+                "❌ <b>访问被拒绝</b>\n\n"
+                "在线程模式下，导航仅限于当前项目根目录。",
                 parse_mode="HTML",
             )
             return
@@ -240,8 +240,8 @@ async def handle_cd_callback(
         # Check if directory exists
         if not new_path.exists() or not new_path.is_dir():
             await query.edit_message_text(
-                f"❌ <b>Directory Not Found</b>\n\n"
-                f"The directory <code>{escape_html(project_name)}</code> no longer exists or is not accessible.",
+                f"❌ <b>目录未找到</b>\n\n"
+                f"目录 <code>{escape_html(project_name)}</code> 不存在或无法访问。",
                 parse_mode="HTML",
             )
             return
@@ -257,17 +257,17 @@ async def handle_cd_callback(
             if existing_session:
                 context.user_data["claude_session_id"] = existing_session.session_id
                 resumed_session_info = (
-                    f"\n🔄 Resumed session <code>{escape_html(existing_session.session_id)}</code> "
-                    f"({existing_session.message_count} messages)"
+                    f"\n🔄 已恢复 session <code>{escape_html(existing_session.session_id)}</code> "
+                    f"({existing_session.message_count} 条消息)"
                 )
             else:
                 context.user_data["claude_session_id"] = None
                 resumed_session_info = (
-                    "\n🆕 No existing session. Send a message to start a new one."
+                    "\n🆕 无现有 session，发送消息即可创建新会话。"
                 )
         else:
             context.user_data["claude_session_id"] = None
-            resumed_session_info = "\n🆕 Send a message to start a new session."
+            resumed_session_info = "\n🆕 发送消息即可创建新 session。"
 
         # Send confirmation with new directory info
         relative_base = project_root or settings.approved_directory
@@ -277,23 +277,23 @@ async def handle_cd_callback(
         # Add navigation buttons
         keyboard = [
             [
-                InlineKeyboardButton("📁 List Files", callback_data="action:ls"),
+                InlineKeyboardButton("📁 列出文件", callback_data="action:ls"),
                 InlineKeyboardButton(
-                    "🆕 New Session", callback_data="action:new_session"
+                    "🆕 新建 session", callback_data="action:new_session"
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    "📋 Projects", callback_data="action:show_projects"
+                    "📋 项目列表", callback_data="action:show_projects"
                 ),
-                InlineKeyboardButton("📊 Status", callback_data="action:status"),
+                InlineKeyboardButton("📊 状态", callback_data="action:status"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(
-            f"✅ <b>Directory Changed</b>\n\n"
-            f"📂 Current directory: <code>{escape_html(str(relative_display))}</code>"
+            f"✅ <b>目录已切换</b>\n\n"
+            f"📂 当前目录：<code>{escape_html(str(relative_display))}</code>"
             f"{resumed_session_info}",
             parse_mode="HTML",
             reply_markup=reply_markup,
@@ -307,7 +307,7 @@ async def handle_cd_callback(
 
     except Exception as e:
         await query.edit_message_text(
-            f"❌ <b>Error changing directory</b>\n\n{escape_html(str(e))}",
+            f"❌ <b>切换目录出错</b>\n\n{escape_html(str(e))}",
             parse_mode="HTML",
         )
 
@@ -341,8 +341,8 @@ async def handle_action_callback(
         await handler(query, context)
     else:
         await query.edit_message_text(
-            f"❌ <b>Unknown Action: {escape_html(action_type)}</b>\n\n"
-            "This action is not implemented yet.",
+            f"❌ <b>未知操作：{escape_html(action_type)}</b>\n\n"
+            "此操作尚未实现。",
             parse_mode="HTML",
         )
 
@@ -353,17 +353,17 @@ async def handle_confirm_callback(
     """Handle confirmation dialogs."""
     if confirmation_type == "yes":
         await query.edit_message_text(
-            "✅ <b>Confirmed</b>\n\nAction will be processed.",
+            "✅ <b>已确认</b>\n\n操作将被处理。",
             parse_mode="HTML",
         )
     elif confirmation_type == "no":
         await query.edit_message_text(
-            "❌ <b>Cancelled</b>\n\nAction was cancelled.",
+            "❌ <b>已取消</b>\n\n操作已被取消。",
             parse_mode="HTML",
         )
     else:
         await query.edit_message_text(
-            "❓ <b>Unknown confirmation response</b>",
+            "❓ <b>未知的确认响应</b>",
             parse_mode="HTML",
         )
 
@@ -374,25 +374,25 @@ async def handle_confirm_callback(
 async def _handle_help_action(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle help action."""
     help_text = (
-        "🤖 <b>Quick Help</b>\n\n"
-        "<b>Navigation:</b>\n"
-        "• <code>/ls</code> - List files\n"
-        "• <code>/cd &lt;dir&gt;</code> - Change directory\n"
-        "• <code>/projects</code> - Show projects\n\n"
-        "<b>Sessions:</b>\n"
-        "• <code>/new</code> - New Claude session\n"
-        "• <code>/status</code> - Session status\n\n"
-        "<b>Tips:</b>\n"
-        "• Send any text to interact with Claude\n"
-        "• Upload files for code review\n"
-        "• Use buttons for quick actions\n\n"
-        "Use <code>/help</code> for detailed help."
+        "🤖 <b>快速帮助</b>\n\n"
+        "<b>导航：</b>\n"
+        "• <code>/ls</code> - 列出文件\n"
+        "• <code>/cd &lt;dir&gt;</code> - 切换目录\n"
+        "• <code>/projects</code> - 显示项目\n\n"
+        "<b>Session：</b>\n"
+        "• <code>/new</code> - 新建 Claude session\n"
+        "• <code>/status</code> - 查看 session 状态\n\n"
+        "<b>提示：</b>\n"
+        "• 发送任意文本与 Claude 交互\n"
+        "• 上传文件进行代码审查\n"
+        "• 使用按钮快速操作\n\n"
+        "使用 <code>/help</code> 查看详细帮助。"
     )
 
     keyboard = [
         [
-            InlineKeyboardButton("📖 Full Help", callback_data="action:full_help"),
-            InlineKeyboardButton("🏠 Main Menu", callback_data="action:main_menu"),
+            InlineKeyboardButton("📖 完整帮助", callback_data="action:full_help"),
+            InlineKeyboardButton("🏠 主菜单", callback_data="action:main_menu"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -413,7 +413,7 @@ async def _handle_show_projects_action(
             registry = context.bot_data.get("project_registry")
             if not registry:
                 await query.edit_message_text(
-                    "❌ <b>Project registry is not initialized.</b>",
+                    "❌ <b>项目注册表未初始化。</b>",
                     parse_mode="HTML",
                 )
                 return
@@ -421,8 +421,8 @@ async def _handle_show_projects_action(
             projects = registry.list_enabled()
             if not projects:
                 await query.edit_message_text(
-                    "📁 <b>No Projects Found</b>\n\n"
-                    "No enabled projects found in projects config.",
+                    "📁 <b>未找到项目</b>\n\n"
+                    "项目配置中没有已启用的项目。",
                     parse_mode="HTML",
                 )
                 return
@@ -437,7 +437,7 @@ async def _handle_show_projects_action(
             )
 
             await query.edit_message_text(
-                f"📁 <b>Configured Projects</b>\n\n{project_list}",
+                f"📁 <b>已配置的项目</b>\n\n{project_list}",
                 parse_mode="HTML",
             )
             return
@@ -450,9 +450,9 @@ async def _handle_show_projects_action(
 
         if not projects:
             await query.edit_message_text(
-                "📁 <b>No Projects Found</b>\n\n"
-                "No subdirectories found in your approved directory.\n"
-                "Create some directories to organize your projects!",
+                "📁 <b>未找到项目</b>\n\n"
+                "授权目录下没有子目录。\n"
+                "请创建一些目录来组织你的项目！",
                 parse_mode="HTML",
             )
             return
@@ -474,9 +474,9 @@ async def _handle_show_projects_action(
         # Add navigation buttons
         keyboard.append(
             [
-                InlineKeyboardButton("🏠 Root", callback_data="cd:/"),
+                InlineKeyboardButton("🏠 根目录", callback_data="cd:/"),
                 InlineKeyboardButton(
-                    "🔄 Refresh", callback_data="action:show_projects"
+                    "🔄 刷新", callback_data="action:show_projects"
                 ),
             ]
         )
@@ -487,15 +487,15 @@ async def _handle_show_projects_action(
         )
 
         await query.edit_message_text(
-            f"📁 <b>Available Projects</b>\n\n"
+            f"📁 <b>可用项目</b>\n\n"
             f"{project_list}\n\n"
-            f"Click a project to navigate to it:",
+            f"点击项目即可跳转：",
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
 
     except Exception as e:
-        await query.edit_message_text(f"❌ Error loading projects: {str(e)}")
+        await query.edit_message_text(f"❌ 加载项目出错：{str(e)}")
 
 
 async def _handle_new_session_action(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -514,25 +514,25 @@ async def _handle_new_session_action(query, context: ContextTypes.DEFAULT_TYPE) 
     keyboard = [
         [
             InlineKeyboardButton(
-                "📝 Start Coding", callback_data="action:start_coding"
+                "📝 开始编码", callback_data="action:start_coding"
             ),
             InlineKeyboardButton(
-                "📁 Change Project", callback_data="action:show_projects"
+                "📁 切换项目", callback_data="action:show_projects"
             ),
         ],
         [
             InlineKeyboardButton(
-                "📋 Quick Actions", callback_data="action:quick_actions"
+                "📋 快捷操作", callback_data="action:quick_actions"
             ),
-            InlineKeyboardButton("❓ Help", callback_data="action:help"),
+            InlineKeyboardButton("❓ 帮助", callback_data="action:help"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
-        f"🆕 <b>New Claude Code Session</b>\n\n"
-        f"📂 Working directory: <code>{escape_html(str(relative_path))}/</code>\n\n"
-        f"Ready to help you code! Send me a message to get started:",
+        f"🆕 <b>新建 Claude Code Session</b>\n\n"
+        f"📂 工作目录：<code>{escape_html(str(relative_path))}/</code>\n\n"
+        f"随时准备协助编码！发送消息即可开始：",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -547,21 +547,21 @@ async def _handle_end_session_action(query, context: ContextTypes.DEFAULT_TYPE) 
 
     if not claude_session_id:
         await query.edit_message_text(
-            "ℹ️ <b>No Active Session</b>\n\n"
-            "There's no active Claude session to end.\n\n"
-            "<b>What you can do:</b>\n"
-            "• Use the button below to start a new session\n"
-            "• Check your session status\n"
-            "• Send any message to start a conversation",
+            "ℹ️ <b>无活跃 session</b>\n\n"
+            "当前没有活跃的 Claude session 可以结束。\n\n"
+            "<b>你可以：</b>\n"
+            "• 使用下方按钮创建新 session\n"
+            "• 查看 session 状态\n"
+            "• 发送任意消息开始新对话",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "🆕 New Session", callback_data="action:new_session"
+                            "🆕 新建 session", callback_data="action:new_session"
                         )
                     ],
-                    [InlineKeyboardButton("📊 Status", callback_data="action:status")],
+                    [InlineKeyboardButton("📊 状态", callback_data="action:status")],
                 ]
             ),
         )
@@ -581,29 +581,29 @@ async def _handle_end_session_action(query, context: ContextTypes.DEFAULT_TYPE) 
     # Create quick action buttons
     keyboard = [
         [
-            InlineKeyboardButton("🆕 New Session", callback_data="action:new_session"),
+            InlineKeyboardButton("🆕 新建 session", callback_data="action:new_session"),
             InlineKeyboardButton(
-                "📁 Change Project", callback_data="action:show_projects"
+                "📁 切换项目", callback_data="action:show_projects"
             ),
         ],
         [
-            InlineKeyboardButton("📊 Status", callback_data="action:status"),
-            InlineKeyboardButton("❓ Help", callback_data="action:help"),
+            InlineKeyboardButton("📊 状态", callback_data="action:status"),
+            InlineKeyboardButton("❓ 帮助", callback_data="action:help"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
-        "✅ <b>Session Ended</b>\n\n"
-        f"Your Claude session has been terminated.\n\n"
-        f"<b>Current Status:</b>\n"
-        f"• Directory: <code>{escape_html(str(relative_path))}/</code>\n"
-        f"• Session: None\n"
-        f"• Ready for new commands\n\n"
-        f"<b>Next Steps:</b>\n"
-        f"• Start a new session\n"
-        f"• Check status\n"
-        f"• Send any message to begin a new conversation",
+        "✅ <b>Session 已结束</b>\n\n"
+        f"你的 Claude session 已终止。\n\n"
+        f"<b>当前状态：</b>\n"
+        f"• 目录：<code>{escape_html(str(relative_path))}/</code>\n"
+        f"• Session：无\n"
+        f"• 准备就绪\n\n"
+        f"<b>下一步：</b>\n"
+        f"• 创建新 session\n"
+        f"• 查看状态\n"
+        f"• 发送任意消息开始新对话",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -622,8 +622,8 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         if not claude_integration:
             await query.edit_message_text(
-                "❌ <b>Claude Integration Not Available</b>\n\n"
-                "Claude integration is not properly configured.",
+                "❌ <b>Claude 集成不可用</b>\n\n"
+                "Claude 集成未正确配置。",
                 parse_mode="HTML",
             )
             return
@@ -634,10 +634,10 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
         if claude_session_id:
             # Continue with the existing session (no prompt = use --continue)
             await query.edit_message_text(
-                f"🔄 <b>Continuing Session</b>\n\n"
+                f"🔄 <b>继续 Session</b>\n\n"
                 f"Session ID: <code>{escape_html(claude_session_id)}</code>\n"
-                f"Directory: <code>{escape_html(str(current_dir.relative_to(settings.approved_directory)))}/</code>\n\n"
-                f"Continuing where you left off...",
+                f"目录：<code>{escape_html(str(current_dir.relative_to(settings.approved_directory)))}/</code>\n\n"
+                f"正在从上次中断处继续...",
                 parse_mode="HTML",
             )
 
@@ -650,8 +650,8 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             # No session in context, try to find the most recent session
             await query.edit_message_text(
-                "🔍 <b>Looking for Recent Session</b>\n\n"
-                "Searching for your most recent session in this directory...",
+                "🔍 <b>查找最近的 Session</b>\n\n"
+                "正在搜索此目录下最近的 session...",
                 parse_mode="HTML",
             )
 
@@ -667,29 +667,29 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
 
             # Send Claude's response
             await query.message.reply_text(
-                f"✅ <b>Session Continued</b>\n\n"
+                f"✅ <b>Session 已继续</b>\n\n"
                 f"{escape_html(claude_response.content[:500])}{'...' if len(claude_response.content) > 500 else ''}",
                 parse_mode="HTML",
             )
         else:
             # No session found to continue
             await query.edit_message_text(
-                "❌ <b>No Session Found</b>\n\n"
-                f"No recent Claude session found in this directory.\n"
-                f"Directory: <code>{escape_html(str(current_dir.relative_to(settings.approved_directory)))}/</code>\n\n"
-                f"<b>What you can do:</b>\n"
-                f"• Use the button below to start a fresh session\n"
-                f"• Check your session status\n"
-                f"• Navigate to a different directory",
+                "❌ <b>未找到 Session</b>\n\n"
+                f"此目录下没有最近的 Claude session。\n"
+                f"目录：<code>{escape_html(str(current_dir.relative_to(settings.approved_directory)))}/</code>\n\n"
+                f"<b>你可以：</b>\n"
+                f"• 使用下方按钮创建新 session\n"
+                f"• 查看 session 状态\n"
+                f"• 切换到其他目录",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [
                             InlineKeyboardButton(
-                                "🆕 New Session", callback_data="action:new_session"
+                                "🆕 新建 session", callback_data="action:new_session"
                             ),
                             InlineKeyboardButton(
-                                "📊 Status", callback_data="action:status"
+                                "📊 状态", callback_data="action:status"
                             ),
                         ]
                     ]
@@ -699,15 +699,15 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error("Error in continue action", error=str(e), user_id=user_id)
         await query.edit_message_text(
-            f"❌ <b>Error Continuing Session</b>\n\n"
-            f"An error occurred: <code>{escape_html(str(e))}</code>\n\n"
-            f"Try starting a new session instead.",
+            f"❌ <b>继续 Session 出错</b>\n\n"
+            f"发生错误：<code>{escape_html(str(e))}</code>\n\n"
+            f"请尝试创建新 session。",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "🆕 New Session", callback_data="action:new_session"
+                            "🆕 新建 session", callback_data="action:new_session"
                         )
                     ]
                 ]
@@ -738,15 +738,15 @@ async def _handle_status_action(query, context: ContextTypes.DEFAULT_TYPE) -> No
             cost_limit = cost_usage.get("limit", settings.claude_max_cost_per_user)
             cost_percentage = (current_cost / cost_limit) * 100 if cost_limit > 0 else 0
 
-            usage_info = f"💰 Usage: ${current_cost:.2f} / ${cost_limit:.2f} ({cost_percentage:.0f}%)\n"
+            usage_info = f"💰 用量：${current_cost:.2f} / ${cost_limit:.2f} ({cost_percentage:.0f}%)\n"
         except Exception:
-            usage_info = "💰 Usage: <i>Unable to retrieve</i>\n"
+            usage_info = "💰 用量：<i>无法获取</i>\n"
 
     status_lines = [
-        "📊 <b>Session Status</b>",
+        "📊 <b>Session 状态</b>",
         "",
-        f"📂 Directory: <code>{escape_html(str(relative_path))}/</code>",
-        f"🤖 Claude Session: {'✅ Active' if claude_session_id else '❌ None'}",
+        f"📂 目录：<code>{escape_html(str(relative_path))}/</code>",
+        f"🤖 Claude Session：{'✅ 活跃' if claude_session_id else '❌ 无'}",
         usage_info.rstrip(),
     ]
 
@@ -760,16 +760,16 @@ async def _handle_status_action(query, context: ContextTypes.DEFAULT_TYPE) -> No
     if claude_session_id:
         keyboard.append(
             [
-                InlineKeyboardButton("🔄 Continue", callback_data="action:continue"),
+                InlineKeyboardButton("🔄 继续", callback_data="action:continue"),
                 InlineKeyboardButton(
-                    "🛑 End Session", callback_data="action:end_session"
+                    "🛑 结束 session", callback_data="action:end_session"
                 ),
             ]
         )
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    "🆕 New Session", callback_data="action:new_session"
+                    "🆕 新建 session", callback_data="action:new_session"
                 ),
             ]
         )
@@ -777,15 +777,15 @@ async def _handle_status_action(query, context: ContextTypes.DEFAULT_TYPE) -> No
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    "🆕 Start Session", callback_data="action:new_session"
+                    "🆕 开始 session", callback_data="action:new_session"
                 )
             ]
         )
 
     keyboard.append(
         [
-            InlineKeyboardButton("🔄 Refresh", callback_data="action:refresh_status"),
-            InlineKeyboardButton("📁 Projects", callback_data="action:show_projects"),
+            InlineKeyboardButton("🔄 刷新", callback_data="action:refresh_status"),
+            InlineKeyboardButton("📁 项目", callback_data="action:show_projects"),
         ]
     )
 
@@ -830,14 +830,14 @@ async def _handle_ls_action(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         relative_path = current_dir.relative_to(settings.approved_directory)
 
         if not items:
-            message = f"📂 <code>{escape_html(str(relative_path))}/</code>\n\n<i>(empty directory)</i>"
+            message = f"📂 <code>{escape_html(str(relative_path))}/</code>\n\n<i>（空目录）</i>"
         else:
             message = f"📂 <code>{escape_html(str(relative_path))}/</code>\n\n"
             max_items = 30  # Limit for inline display
             if len(items) > max_items:
                 shown_items = items[:max_items]
                 message += "\n".join(shown_items)
-                message += f"\n\n<i>... and {len(items) - max_items} more items</i>"
+                message += f"\n\n<i>...还有 {len(items) - max_items} 个项目</i>"
             else:
                 message += "\n".join(items)
 
@@ -846,16 +846,16 @@ async def _handle_ls_action(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         if current_dir != settings.approved_directory:
             keyboard.append(
                 [
-                    InlineKeyboardButton("⬆️ Go Up", callback_data="cd:.."),
-                    InlineKeyboardButton("🏠 Root", callback_data="cd:/"),
+                    InlineKeyboardButton("⬆️ 上级目录", callback_data="cd:.."),
+                    InlineKeyboardButton("🏠 根目录", callback_data="cd:/"),
                 ]
             )
 
         keyboard.append(
             [
-                InlineKeyboardButton("🔄 Refresh", callback_data="action:refresh_ls"),
+                InlineKeyboardButton("🔄 刷新", callback_data="action:refresh_ls"),
                 InlineKeyboardButton(
-                    "📋 Projects", callback_data="action:show_projects"
+                    "📋 项目列表", callback_data="action:show_projects"
                 ),
             ]
         )
@@ -867,7 +867,7 @@ async def _handle_ls_action(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
     except Exception as e:
-        await query.edit_message_text(f"❌ Error listing directory: {str(e)}")
+        await query.edit_message_text(f"❌ 列出目录出错：{str(e)}")
 
 
 async def _handle_start_coding_action(
@@ -875,14 +875,14 @@ async def _handle_start_coding_action(
 ) -> None:
     """Handle start coding action."""
     await query.edit_message_text(
-        "🚀 <b>Ready to Code!</b>\n\n"
-        "Send me any message to start coding with Claude:\n\n"
-        "<b>Examples:</b>\n"
-        '• <i>"Create a Python script that..."</i>\n'
-        '• <i>"Help me debug this code..."</i>\n'
-        '• <i>"Explain how this file works..."</i>\n'
-        "• Upload a file for review\n\n"
-        "I'm here to help with all your coding needs!",
+        "🚀 <b>准备就绪！</b>\n\n"
+        "发送任意消息即可与 Claude 一起编码：\n\n"
+        "<b>示例：</b>\n"
+        '• <i>"创建一个 Python 脚本..."</i>\n'
+        '• <i>"帮我调试这段代码..."</i>\n'
+        '• <i>"解释一下这个文件的工作原理..."</i>\n'
+        "• 上传文件进行代码审查\n\n"
+        "随时为你提供编码帮助！",
         parse_mode="HTML",
     )
 
@@ -893,29 +893,29 @@ async def _handle_quick_actions_action(
     """Handle quick actions menu."""
     keyboard = [
         [
-            InlineKeyboardButton("🧪 Run Tests", callback_data="quick:test"),
-            InlineKeyboardButton("📦 Install Deps", callback_data="quick:install"),
+            InlineKeyboardButton("🧪 运行测试", callback_data="quick:test"),
+            InlineKeyboardButton("📦 安装依赖", callback_data="quick:install"),
         ],
         [
-            InlineKeyboardButton("🎨 Format Code", callback_data="quick:format"),
-            InlineKeyboardButton("🔍 Find TODOs", callback_data="quick:find_todos"),
+            InlineKeyboardButton("🎨 格式化代码", callback_data="quick:format"),
+            InlineKeyboardButton("🔍 查找 TODO", callback_data="quick:find_todos"),
         ],
         [
-            InlineKeyboardButton("🔨 Build", callback_data="quick:build"),
-            InlineKeyboardButton("🚀 Start Server", callback_data="quick:start"),
+            InlineKeyboardButton("🔨 构建", callback_data="quick:build"),
+            InlineKeyboardButton("🚀 启动服务", callback_data="quick:start"),
         ],
         [
-            InlineKeyboardButton("📊 Git Status", callback_data="quick:git_status"),
-            InlineKeyboardButton("🔧 Lint Code", callback_data="quick:lint"),
+            InlineKeyboardButton("📊 Git 状态", callback_data="quick:git_status"),
+            InlineKeyboardButton("🔧 代码检查", callback_data="quick:lint"),
         ],
-        [InlineKeyboardButton("⬅️ Back", callback_data="action:new_session")],
+        [InlineKeyboardButton("⬅️ 返回", callback_data="action:new_session")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
-        "🛠️ <b>Quick Actions</b>\n\n"
-        "Choose a common development task:\n\n"
-        "<i>Note: These will be fully functional once Claude Code integration is complete.</i>",
+        "🛠️ <b>快捷操作</b>\n\n"
+        "选择常用开发任务：\n\n"
+        "<i>注：Claude Code 集成完成后这些功能将完全可用。</i>",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -936,14 +936,14 @@ async def _handle_refresh_ls_action(query, context: ContextTypes.DEFAULT_TYPE) -
 async def _handle_export_action(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle export action."""
     await query.edit_message_text(
-        "📤 <b>Export Session</b>\n\n"
-        "Session export functionality will be available once the storage layer is implemented.\n\n"
-        "<b>Planned features:</b>\n"
-        "• Export conversation history\n"
-        "• Save session state\n"
-        "• Share conversations\n"
-        "• Create session backups\n\n"
-        "<i>Coming in the next development phase!</i>",
+        "📤 <b>导出 Session</b>\n\n"
+        "存储层实现后，session 导出功能将可用。\n\n"
+        "<b>计划功能：</b>\n"
+        "• 导出对话历史\n"
+        "• 保存 session 状态\n"
+        "• 分享对话\n"
+        "• 创建 session 备份\n\n"
+        "<i>即将在下一开发阶段推出！</i>",
         parse_mode="HTML",
     )
 
@@ -959,8 +959,8 @@ async def handle_quick_action_callback(
 
     if not quick_actions:
         await query.edit_message_text(
-            "❌ <b>Quick Actions Not Available</b>\n\n"
-            "Quick actions feature is not available.",
+            "❌ <b>快捷操作不可用</b>\n\n"
+            "快捷操作功能不可用。",
             parse_mode="HTML",
         )
         return
@@ -969,8 +969,8 @@ async def handle_quick_action_callback(
     claude_integration: ClaudeIntegration = context.bot_data.get("claude_integration")
     if not claude_integration:
         await query.edit_message_text(
-            "❌ <b>Claude Integration Not Available</b>\n\n"
-            "Claude integration is not properly configured.",
+            "❌ <b>Claude 集成不可用</b>\n\n"
+            "Claude 集成未正确配置。",
             parse_mode="HTML",
         )
         return
@@ -985,17 +985,17 @@ async def handle_quick_action_callback(
         action = quick_actions.actions.get(action_id)
         if not action:
             await query.edit_message_text(
-                f"❌ <b>Action Not Found</b>\n\n"
-                f"Quick action '{escape_html(action_id)}' is not available.",
+                f"❌ <b>操作未找到</b>\n\n"
+                f"快捷操作 '{escape_html(action_id)}' 不可用。",
                 parse_mode="HTML",
             )
             return
 
         # Execute the action
         await query.edit_message_text(
-            f"🚀 <b>Executing {action.icon} {escape_html(action.name)}</b>\n\n"
-            f"Running quick action in directory: <code>{escape_html(str(current_dir.relative_to(settings.approved_directory)))}/</code>\n\n"
-            f"Please wait...",
+            f"🚀 <b>正在执行 {action.icon} {escape_html(action.name)}</b>\n\n"
+            f"在目录中运行快捷操作：<code>{escape_html(str(current_dir.relative_to(settings.approved_directory)))}/</code>\n\n"
+            f"请稍候...",
             parse_mode="HTML",
         )
 
@@ -1009,25 +1009,25 @@ async def handle_quick_action_callback(
             response_text = escape_html(claude_response.content)
             if len(response_text) > 4000:
                 response_text = (
-                    response_text[:4000] + "...\n\n<i>(Response truncated)</i>"
+                    response_text[:4000] + "...\n\n<i>（响应已截断）</i>"
                 )
 
             await query.message.reply_text(
-                f"✅ <b>{action.icon} {escape_html(action.name)} Complete</b>\n\n{response_text}",
+                f"✅ <b>{action.icon} {escape_html(action.name)} 完成</b>\n\n{response_text}",
                 parse_mode="HTML",
             )
         else:
             await query.edit_message_text(
-                f"❌ <b>Action Failed</b>\n\n"
-                f"Failed to execute {escape_html(action.name)}. Please try again.",
+                f"❌ <b>操作失败</b>\n\n"
+                f"执行 {escape_html(action.name)} 失败，请重试。",
                 parse_mode="HTML",
             )
 
     except Exception as e:
         logger.error("Quick action execution failed", error=str(e), user_id=user_id)
         await query.edit_message_text(
-            f"❌ <b>Action Error</b>\n\n"
-            f"An error occurred while executing {escape_html(action_id)}: {escape_html(str(e))}",
+            f"❌ <b>操作出错</b>\n\n"
+            f"执行 {escape_html(action_id)} 时发生错误：{escape_html(str(e))}",
             parse_mode="HTML",
         )
 
@@ -1043,8 +1043,8 @@ async def handle_followup_callback(
 
     if not conversation_enhancer:
         await query.edit_message_text(
-            "❌ <b>Follow-up Not Available</b>\n\n"
-            "Conversation enhancement features are not available.",
+            "❌ <b>后续建议不可用</b>\n\n"
+            "对话增强功能不可用。",
             parse_mode="HTML",
         )
         return
@@ -1053,13 +1053,13 @@ async def handle_followup_callback(
         # Get stored suggestions (this would need to be implemented in the enhancer)
         # For now, we'll provide a generic response
         await query.edit_message_text(
-            "💡 <b>Follow-up Suggestion Selected</b>\n\n"
-            "This follow-up suggestion will be implemented once the conversation "
-            "enhancement system is fully integrated with the message handler.\n\n"
-            "<b>Current Status:</b>\n"
-            "• Suggestion received ✅\n"
-            "• Integration pending 🔄\n\n"
-            "<i>You can continue the conversation by sending a new message.</i>",
+            "💡 <b>已选择后续建议</b>\n\n"
+            "此后续建议将在对话增强系统"
+            "与消息处理器完全集成后实现。\n\n"
+            "<b>当前状态：</b>\n"
+            "• 建议已接收 ✅\n"
+            "• 集成待定 🔄\n\n"
+            "<i>你可以发送新消息继续对话。</i>",
             parse_mode="HTML",
         )
 
@@ -1078,8 +1078,8 @@ async def handle_followup_callback(
         )
 
         await query.edit_message_text(
-            "❌ <b>Error Processing Follow-up</b>\n\n"
-            "An error occurred while processing your follow-up suggestion.",
+            "❌ <b>处理后续建议出错</b>\n\n"
+            "处理后续建议时发生错误。",
             parse_mode="HTML",
         )
 
@@ -1094,15 +1094,15 @@ async def handle_conversation_callback(
     if action_type == "continue":
         # Remove suggestion buttons and show continue message
         await query.edit_message_text(
-            "✅ <b>Continuing Conversation</b>\n\n"
-            "Send me your next message to continue coding!\n\n"
-            "I'm ready to help with:\n"
-            "• Code review and debugging\n"
-            "• Feature implementation\n"
-            "• Architecture decisions\n"
-            "• Testing and optimization\n"
-            "• Documentation\n\n"
-            "<i>Just type your request or upload files.</i>",
+            "✅ <b>继续对话</b>\n\n"
+            "发送下一条消息即可继续编码！\n\n"
+            "我可以帮你：\n"
+            "• 代码审查与调试\n"
+            "• 功能实现\n"
+            "• 架构设计\n"
+            "• 测试与优化\n"
+            "• 文档编写\n\n"
+            "<i>直接输入需求或上传文件即可。</i>",
             parse_mode="HTML",
         )
 
@@ -1125,30 +1125,30 @@ async def handle_conversation_callback(
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "🆕 New Session", callback_data="action:new_session"
+                    "🆕 新建 session", callback_data="action:new_session"
                 ),
                 InlineKeyboardButton(
-                    "📁 Change Project", callback_data="action:show_projects"
+                    "📁 切换项目", callback_data="action:show_projects"
                 ),
             ],
             [
-                InlineKeyboardButton("📊 Status", callback_data="action:status"),
-                InlineKeyboardButton("❓ Help", callback_data="action:help"),
+                InlineKeyboardButton("📊 状态", callback_data="action:status"),
+                InlineKeyboardButton("❓ 帮助", callback_data="action:help"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(
-            "✅ <b>Conversation Ended</b>\n\n"
-            f"Your Claude session has been terminated.\n\n"
-            f"<b>Current Status:</b>\n"
-            f"• Directory: <code>{escape_html(str(relative_path))}/</code>\n"
-            f"• Session: None\n"
-            f"• Ready for new commands\n\n"
-            f"<b>Next Steps:</b>\n"
-            f"• Start a new session\n"
-            f"• Check status\n"
-            f"• Send any message to begin a new conversation",
+            "✅ <b>对话已结束</b>\n\n"
+            f"你的 Claude session 已终止。\n\n"
+            f"<b>当前状态：</b>\n"
+            f"• 目录：<code>{escape_html(str(relative_path))}/</code>\n"
+            f"• Session：无\n"
+            f"• 准备就绪\n\n"
+            f"<b>下一步：</b>\n"
+            f"• 创建新 session\n"
+            f"• 查看状态\n"
+            f"• 发送任意消息开始新对话",
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
@@ -1157,8 +1157,8 @@ async def handle_conversation_callback(
 
     else:
         await query.edit_message_text(
-            f"❌ <b>Unknown Conversation Action: {escape_html(action_type)}</b>\n\n"
-            "This conversation action is not recognized.",
+            f"❌ <b>未知对话操作：{escape_html(action_type)}</b>\n\n"
+            "无法识别此对话操作。",
             parse_mode="HTML",
         )
 
@@ -1173,8 +1173,8 @@ async def handle_git_callback(
 
     if not features or not features.is_enabled("git"):
         await query.edit_message_text(
-            "❌ <b>Git Integration Disabled</b>\n\n"
-            "Git integration feature is not enabled.",
+            "❌ <b>Git 集成已禁用</b>\n\n"
+            "Git 集成功能未启用。",
             parse_mode="HTML",
         )
         return
@@ -1187,8 +1187,8 @@ async def handle_git_callback(
         git_integration = features.get_git_integration()
         if not git_integration:
             await query.edit_message_text(
-                "❌ <b>Git Integration Unavailable</b>\n\n"
-                "Git integration service is not available.",
+                "❌ <b>Git 集成不可用</b>\n\n"
+                "Git 集成服务不可用。",
                 parse_mode="HTML",
             )
             return
@@ -1200,12 +1200,12 @@ async def handle_git_callback(
 
             keyboard = [
                 [
-                    InlineKeyboardButton("📊 Show Diff", callback_data="git:diff"),
-                    InlineKeyboardButton("📜 Show Log", callback_data="git:log"),
+                    InlineKeyboardButton("📊 查看 Diff", callback_data="git:diff"),
+                    InlineKeyboardButton("📜 查看 Log", callback_data="git:log"),
                 ],
                 [
-                    InlineKeyboardButton("🔄 Refresh", callback_data="git:status"),
-                    InlineKeyboardButton("📁 Files", callback_data="action:ls"),
+                    InlineKeyboardButton("🔄 刷新", callback_data="git:status"),
+                    InlineKeyboardButton("📁 文件", callback_data="action:ls"),
                 ],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1219,7 +1219,7 @@ async def handle_git_callback(
             diff_output = await git_integration.get_diff(current_dir)
 
             if not diff_output.strip():
-                diff_message = "📊 <b>Git Diff</b>\n\n<i>No changes to show.</i>"
+                diff_message = "📊 <b>Git Diff</b>\n\n<i>没有可显示的更改。</i>"
             else:
                 # Clean up diff output for Telegram
                 # Remove emoji symbols that interfere with parsing
@@ -1232,7 +1232,7 @@ async def handle_git_callback(
                 max_length = 3500
                 if len(clean_diff) > max_length:
                     clean_diff = (
-                        clean_diff[:max_length] + "\n\n... output truncated ..."
+                        clean_diff[:max_length] + "\n\n...输出已截断..."
                     )
 
                 escaped_diff = escape_html(clean_diff)
@@ -1242,8 +1242,8 @@ async def handle_git_callback(
 
             keyboard = [
                 [
-                    InlineKeyboardButton("📜 Show Log", callback_data="git:log"),
-                    InlineKeyboardButton("📊 Status", callback_data="git:status"),
+                    InlineKeyboardButton("📜 查看 Log", callback_data="git:log"),
+                    InlineKeyboardButton("📊 状态", callback_data="git:status"),
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1257,7 +1257,7 @@ async def handle_git_callback(
             commits = await git_integration.get_file_history(current_dir, ".")
 
             if not commits:
-                log_message = "📜 <b>Git Log</b>\n\n<i>No commits found.</i>"
+                log_message = "📜 <b>Git Log</b>\n\n<i>未找到提交记录。</i>"
             else:
                 log_message = "📜 <b>Git Log</b>\n\n"
                 for commit in commits[:10]:  # Show last 10 commits
@@ -1269,8 +1269,8 @@ async def handle_git_callback(
 
             keyboard = [
                 [
-                    InlineKeyboardButton("📊 Show Diff", callback_data="git:diff"),
-                    InlineKeyboardButton("📊 Status", callback_data="git:status"),
+                    InlineKeyboardButton("📊 查看 Diff", callback_data="git:diff"),
+                    InlineKeyboardButton("📊 状态", callback_data="git:status"),
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1281,8 +1281,8 @@ async def handle_git_callback(
 
         else:
             await query.edit_message_text(
-                f"❌ <b>Unknown Git Action: {escape_html(git_action)}</b>\n\n"
-                "This git action is not recognized.",
+                f"❌ <b>未知 Git 操作：{escape_html(git_action)}</b>\n\n"
+                "无法识别此 Git 操作。",
                 parse_mode="HTML",
             )
 
@@ -1294,7 +1294,7 @@ async def handle_git_callback(
             user_id=user_id,
         )
         await query.edit_message_text(
-            f"❌ <b>Git Error</b>\n\n{escape_html(str(e))}",
+            f"❌ <b>Git 错误</b>\n\n{escape_html(str(e))}",
             parse_mode="HTML",
         )
 
@@ -1308,7 +1308,7 @@ async def handle_export_callback(
 
     if export_format == "cancel":
         await query.edit_message_text(
-            "📤 <b>Export Cancelled</b>\n\n" "Session export has been cancelled.",
+            "📤 <b>导出已取消</b>\n\n" "Session 导出已取消。",
             parse_mode="HTML",
         )
         return
@@ -1316,8 +1316,8 @@ async def handle_export_callback(
     session_exporter = features.get_session_export() if features else None
     if not session_exporter:
         await query.edit_message_text(
-            "❌ <b>Export Unavailable</b>\n\n"
-            "Session export service is not available.",
+            "❌ <b>导出不可用</b>\n\n"
+            "Session 导出服务不可用。",
             parse_mode="HTML",
         )
         return
@@ -1326,7 +1326,7 @@ async def handle_export_callback(
     claude_session_id = context.user_data.get("claude_session_id")
     if not claude_session_id:
         await query.edit_message_text(
-            "❌ <b>No Active Session</b>\n\n" "There's no active session to export.",
+            "❌ <b>无活跃 Session</b>\n\n" "没有活跃的 session 可以导出。",
             parse_mode="HTML",
         )
         return
@@ -1334,8 +1334,8 @@ async def handle_export_callback(
     try:
         # Show processing message
         await query.edit_message_text(
-            f"📤 <b>Exporting Session</b>\n\n"
-            f"Generating {escape_html(export_format.upper())} export...",
+            f"📤 <b>正在导出 Session</b>\n\n"
+            f"正在生成 {escape_html(export_format.upper())} 导出文件...",
             parse_mode="HTML",
         )
 
@@ -1354,19 +1354,19 @@ async def handle_export_callback(
             document=file_bytes,
             filename=exported_session.filename,
             caption=(
-                f"📤 <b>Session Export Complete</b>\n\n"
-                f"Format: {escape_html(exported_session.format.upper())}\n"
-                f"Size: {exported_session.size_bytes:,} bytes\n"
-                f"Created: {exported_session.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
+                f"📤 <b>Session 导出完成</b>\n\n"
+                f"格式：{escape_html(exported_session.format.upper())}\n"
+                f"大小：{exported_session.size_bytes:,} 字节\n"
+                f"创建时间：{exported_session.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
             ),
             parse_mode="HTML",
         )
 
         # Update the original message
         await query.edit_message_text(
-            f"✅ <b>Export Complete</b>\n\n"
-            f"Your session has been exported as {escape_html(exported_session.filename)}.\n"
-            f"Check the file above for your complete conversation history.",
+            f"✅ <b>导出完成</b>\n\n"
+            f"你的 session 已导出为 {escape_html(exported_session.filename)}。\n"
+            f"请查看上方文件获取完整对话历史。",
             parse_mode="HTML",
         )
 
@@ -1375,7 +1375,7 @@ async def handle_export_callback(
             "Export failed", error=str(e), user_id=user_id, format=export_format
         )
         await query.edit_message_text(
-            f"❌ <b>Export Failed</b>\n\n{escape_html(str(e))}",
+            f"❌ <b>导出失败</b>\n\n{escape_html(str(e))}",
             parse_mode="HTML",
         )
 
