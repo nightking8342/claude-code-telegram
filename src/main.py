@@ -339,7 +339,7 @@ async def run_application(app: Dict[str, Any]) -> None:
                     - datetime.fromisoformat(marker["timestamp"])
                 ).total_seconds()
                 if age < 300:  # only if marker is < 5 minutes old
-                    text = "✅ <b>Restart complete.</b>\n\nBot is back online."
+                    text = "✅ <b>重启完成。</b>\n\n机器人已上线。"
 
                     # Append session resume info for the root directory
                     try:
