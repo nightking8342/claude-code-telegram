@@ -26,6 +26,7 @@ from ..config.settings import Settings
 from ..exceptions import ClaudeCodeTelegramError
 from .features.registry import FeatureRegistry
 from .orchestrator import MessageOrchestrator
+from .polling_recovery import PollingRecoveryManager
 
 logger = structlog.get_logger()
 
@@ -41,6 +42,7 @@ class ClaudeCodeBot:
         self.is_running = False
         self.feature_registry: Optional[FeatureRegistry] = None
         self.orchestrator = MessageOrchestrator(settings, dependencies)
+        self.recovery = PollingRecoveryManager()
 
     async def initialize(self) -> None:
         """Initialize bot application. Idempotent — safe to call multiple times."""
@@ -76,6 +78,9 @@ class ClaudeCodeBot:
         if proxy_url:
             builder.proxy(proxy_url)
             logger.info("Proxy configured", proxy=proxy_url)
+
+        # Polling recovery: error classification + reconnect ladder + watchdog
+        builder.post_init(self.recovery.on_post_init)
 
         self.app = builder.build()
 
@@ -250,6 +255,10 @@ class ClaudeCodeBot:
 
         try:
             self.is_running = False  # Stop the main loop first
+
+            # Shutdown polling recovery watchdog
+            if self.recovery:
+                await self.recovery.shutdown()
 
             # Shutdown feature registry
             if self.feature_registry:
