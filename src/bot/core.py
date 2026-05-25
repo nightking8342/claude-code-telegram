@@ -113,9 +113,11 @@ class ClaudeCodeBot:
         logger.info("Bot initialization complete")
 
     async def _set_bot_commands(self) -> None:
-        """Set bot command menu via orchestrator."""
+        """Set bot command menu via orchestrator (default + Chinese)."""
         commands = await self.orchestrator.get_bot_commands()
         await self.app.bot.set_my_commands(commands)
+        commands_zh = await self.orchestrator.get_bot_commands_zh()
+        await self.app.bot.set_my_commands(commands_zh, language_code="zh")
         logger.info("Bot commands set", commands=[cmd.command for cmd in commands])
 
     def _register_handlers(self) -> None:

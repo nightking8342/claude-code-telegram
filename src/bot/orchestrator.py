@@ -538,7 +538,7 @@ class MessageOrchestrator:
                 BotCommand("repo", "List repos / switch workspace"),
                 BotCommand("provider", "List/switch API providers"),
                 BotCommand("model", "Show/override model"),
-                BotCommand("sessions", "浏览并恢复历史 session"),
+                BotCommand("sessions", "Browse & resume sessions"),
                 BotCommand("restart", "Restart the bot"),
             ]
             if self.settings.enable_project_threads:
@@ -557,7 +557,7 @@ class MessageOrchestrator:
                 BotCommand("projects", "Show all projects"),
                 BotCommand("status", "Show session status"),
                 BotCommand("export", "Export current session"),
-                BotCommand("sessions", "浏览并恢复历史 session"),
+                BotCommand("sessions", "Browse & resume sessions"),
                 BotCommand("actions", "Show quick actions"),
                 BotCommand("git", "Git repository commands"),
                 BotCommand("provider", "List/switch API providers"),
@@ -566,6 +566,47 @@ class MessageOrchestrator:
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
+            return commands
+
+    async def get_bot_commands_zh(self) -> list:  # type: ignore[type-arg]
+        """Return Chinese translations for bot commands."""
+        if self.settings.agentic_mode:
+            commands = [
+                BotCommand("start", "启动机器人"),
+                BotCommand("new", "新建会话"),
+                BotCommand("status", "查看会话状态"),
+                BotCommand("verbose", "设置输出详细度 (0/1/2)"),
+                BotCommand("repo", "列出/切换项目目录"),
+                BotCommand("provider", "列出/切换 API 提供商"),
+                BotCommand("model", "查看/切换模型"),
+                BotCommand("sessions", "浏览并恢复历史会话"),
+                BotCommand("restart", "重启机器人"),
+            ]
+            if self.settings.enable_project_threads:
+                commands.append(BotCommand("sync_threads", "同步项目话题"))
+            return commands
+        else:
+            commands = [
+                BotCommand("start", "启动并显示帮助"),
+                BotCommand("help", "显示可用命令"),
+                BotCommand("new", "清空上下文，新建会话"),
+                BotCommand("continue", "继续上一个会话"),
+                BotCommand("end", "结束当前会话并清空上下文"),
+                BotCommand("ls", "列出当前目录文件"),
+                BotCommand("cd", "切换目录（恢复项目会话）"),
+                BotCommand("pwd", "显示当前目录"),
+                BotCommand("projects", "显示所有项目"),
+                BotCommand("status", "查看会话状态"),
+                BotCommand("export", "导出当前会话"),
+                BotCommand("sessions", "浏览并恢复历史会话"),
+                BotCommand("actions", "显示快捷操作"),
+                BotCommand("git", "Git 仓库命令"),
+                BotCommand("provider", "列出/切换 API 提供商"),
+                BotCommand("model", "查看/切换模型"),
+                BotCommand("restart", "重启机器人"),
+            ]
+            if self.settings.enable_project_threads:
+                commands.append(BotCommand("sync_threads", "同步项目话题"))
             return commands
 
     # --- Agentic handlers ---
