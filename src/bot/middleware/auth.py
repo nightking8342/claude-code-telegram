@@ -85,8 +85,8 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
         # Welcome message for new session
         if event.effective_message:
             await event.effective_message.reply_text(
-                f"🔓 Welcome! You are now authenticated.\n"
-                f"Session started at {datetime.now(UTC).strftime('%H:%M:%S UTC')}"
+                f"🔓 认证成功！\n"
+                f"会话开始于 {datetime.now(UTC).strftime('%H:%M:%S UTC')}"
             )
 
         # Continue to handler
@@ -98,11 +98,11 @@ async def auth_middleware(handler: Callable, event: Any, data: Dict[str, Any]) -
 
         if event.effective_message:
             await event.effective_message.reply_text(
-                "🔒 <b>Authentication Required</b>\n\n"
-                "You are not authorized to use this bot.\n"
-                "Please contact the administrator for access.\n\n"
-                f"Your Telegram ID: <code>{user_id}</code>\n"
-                "Share this ID with the administrator to request access.",
+                "🔒 <b>需要认证</b>\n\n"
+                "你没有使用此机器人的权限。\n"
+                "请联系管理员获取访问权限。\n\n"
+                f"你的 Telegram ID: <code>{user_id}</code>\n"
+                "将此 ID 发给管理员以申请访问权限。",
                 parse_mode="HTML",
             )
         return  # Stop processing
