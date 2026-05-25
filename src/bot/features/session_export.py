@@ -1,9 +1,11 @@
 """Session export functionality for exporting chat history in various formats."""
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from pathlib import Path
 
 from src.storage.facade import Storage
 from src.utils.constants import MAX_SESSION_LENGTH
@@ -27,6 +29,105 @@ class ExportedSession:
     mime_type: str
     size_bytes: int
     created_at: datetime
+
+
+def _extract_text(content) -> str:
+    """Extract plain text from Claude message content (str or list)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "\n".join(parts)
+    return ""
+
+
+def _read_cli_session(session_id: str):
+    """Read session metadata and messages from a Claude CLI JSONL transcript.
+
+    Returns ``(session_dict, messages_list)`` or ``(None, [])`` if not found.
+    """
+    from src.claude.facade import ClaudeIntegration
+
+    # We don't know the project path here, so scan all project dirs
+    home = Path(os.path.expanduser("~"))
+    projects_dir = home / ".claude" / "projects"
+    if not projects_dir.is_dir():
+        return None, []
+
+    for proj_dir in projects_dir.iterdir():
+        if not proj_dir.is_dir():
+            continue
+        jsonl_path = proj_dir / f"{session_id}.jsonl"
+        if not jsonl_path.is_file() or jsonl_path.stat().st_size < 10:
+            continue
+
+        try:
+            created_at = None
+            messages: list = []
+            msg_idx = 0
+            with open(jsonl_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    obj_type = obj.get("type")
+                    if created_at is None and "timestamp" in obj:
+                        ts = obj["timestamp"]
+                        if isinstance(ts, str):
+                            try:
+                                created_at = datetime.fromisoformat(
+                                    ts.replace("Z", "+00:00")
+                                )
+                            except ValueError:
+                                pass
+                    if obj_type == "user":
+                        text = _extract_text(
+                            obj.get("message", {}).get("content")
+                        )
+                        if text:
+                            messages.append({
+                                "id": msg_idx,
+                                "role": "user",
+                                "content": text,
+                                "created_at": obj.get("timestamp", ""),
+                            })
+                            msg_idx += 1
+                    elif obj_type == "assistant":
+                        text = _extract_text(
+                            obj.get("message", {}).get("content")
+                        )
+                        if text:
+                            messages.append({
+                                "id": msg_idx,
+                                "role": "assistant",
+                                "content": text,
+                                "created_at": obj.get("timestamp", ""),
+                            })
+                            msg_idx += 1
+                    if len(messages) >= MAX_SESSION_LENGTH:
+                        break
+
+            mtime = datetime.fromtimestamp(
+                jsonl_path.stat().st_mtime, tz=UTC
+            )
+            session = {
+                "id": session_id,
+                "user_id": 0,
+                "created_at": created_at or mtime,
+                "updated_at": mtime,
+            }
+            return session, messages
+        except Exception:
+            continue
+
+    return None, []
 
 
 class SessionExporter:
@@ -59,39 +160,45 @@ class SessionExporter:
         Raises:
             ValueError: If session not found or invalid format
         """
-        # Get session data
-        session_model = await self.storage.sessions.get_session(session_id)
-        if not session_model:
-            raise ValueError(f"Session {session_id} not found")
+        # Always try JSONL first — it contains the full conversation
+        # (including CLI messages and bot messages that resume the same session).
+        session, messages = _read_cli_session(session_id)
 
-        # Get session messages
-        message_models = await self.storage.messages.get_session_messages(
-            session_id, limit=MAX_SESSION_LENGTH
-        )
+        if session is None:
+            # No JSONL transcript — fall back to DB
+            session_model = await self.storage.sessions.get_session(
+                session_id
+            )
+            if not session_model:
+                raise ValueError(f"Session {session_id} not found")
 
-        # Convert models to dicts for export methods
-        session = {
-            "id": session_model.session_id,
-            "user_id": session_model.user_id,
-            "created_at": session_model.created_at,
-            "updated_at": session_model.last_used,
-        }
-        messages = []
-        for i, msg in enumerate(message_models):
-            if msg.prompt:
-                messages.append({
-                    "id": i,
-                    "role": "user",
-                    "content": msg.prompt,
-                    "created_at": msg.timestamp,
-                })
-            if msg.response:
-                messages.append({
-                    "id": i,
-                    "role": "assistant",
-                    "content": msg.response,
-                    "created_at": msg.timestamp,
-                })
+            message_models = (
+                await self.storage.messages.get_session_messages(
+                    session_id, limit=MAX_SESSION_LENGTH
+                )
+            )
+            session = {
+                "id": session_model.session_id,
+                "user_id": session_model.user_id,
+                "created_at": session_model.created_at,
+                "updated_at": session_model.last_used,
+            }
+            messages = []
+            for i, msg in enumerate(message_models):
+                if msg.prompt:
+                    messages.append({
+                        "id": i,
+                        "role": "user",
+                        "content": msg.prompt,
+                        "created_at": msg.timestamp,
+                    })
+                if msg.response:
+                    messages.append({
+                        "id": i,
+                        "role": "assistant",
+                        "content": msg.response,
+                        "created_at": msg.timestamp,
+                    })
 
         # Export based on format
         if format == ExportFormat.MARKDOWN:

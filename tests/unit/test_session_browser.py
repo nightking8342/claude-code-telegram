@@ -226,12 +226,13 @@ class TestSessionDetailView:
         assert "my title" in text
         assert "abc-123" in text
         assert "23" in text
-        # Buttons: view / resume / export / back
+        # Buttons: html / md / json / resume / back
         flat = [btn for row in kb.inline_keyboard for btn in row]
         cbs = {b.callback_data for b in flat}
         assert "sessions:view:abc-123" in cbs
         assert "sessions:resume:abc-123" in cbs
-        assert "sessions:export:abc-123" in cbs
+        assert "sessions:export:abc-123:md" in cbs
+        assert "sessions:export:abc-123:json" in cbs
         assert "sessions:back:0" in cbs
 
     @pytest.mark.asyncio

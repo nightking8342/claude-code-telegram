@@ -147,16 +147,41 @@ class SessionManager:
                     session_owner=session.user_id,
                     requesting_user=user_id,
                 )
-            elif not session.is_expired(self.config.session_timeout_hours):
+            else:
                 logger.debug("Using active session", session_id=session_id)
                 return session
 
-        # Try to load from storage (filtered by user_id)
+        # Try to load from storage (filtered by user_id).
+        # When an explicit session_id is given (manual resume), skip the
+        # expiration check — the user knows what they want.  Expiration only
+        # gates auto-resume where we pick the most recent session ourselves.
         if session_id:
             session = await self.storage.load_session(session_id, user_id)
-            if session and not session.is_expired(self.config.session_timeout_hours):
+            if session:
                 self.active_sessions[session_id] = session
                 logger.info("Loaded session from storage", session_id=session_id)
+                return session
+
+            # CLI session fallback: check if the JSONL transcript exists
+            cli_meta = self._cli_session_meta(session_id, project_path)
+            if cli_meta:
+                session = ClaudeSession(
+                    session_id=session_id,
+                    user_id=user_id,
+                    project_path=project_path,
+                    created_at=cli_meta["created_at"] or datetime.now(UTC),
+                    last_used=datetime.now(UTC),
+                    total_cost=0.0,
+                    total_turns=0,
+                    message_count=cli_meta["message_count"],
+                    is_new_session=False,
+                )
+                self.active_sessions[session_id] = session
+                logger.info(
+                    "Resuming CLI session from transcript",
+                    session_id=session_id,
+                    cli_message_count=cli_meta["message_count"],
+                )
                 return session
 
         # Check user session limit
@@ -235,6 +260,56 @@ class SessionManager:
 
         await self.storage.delete_session(session_id)
         logger.info("Session removed", session_id=session_id)
+
+    @staticmethod
+    def _cli_session_meta(
+        session_id: str, project_path: Path
+    ) -> Optional[dict]:
+        """Return CLI session metadata or None if transcript not found.
+
+        Keys: ``message_count``, ``created_at``.
+        """
+        import json as _json
+        import os
+
+        from .facade import ClaudeIntegration
+
+        encoded = ClaudeIntegration._encode_project_path(project_path)
+        home = Path(os.path.expanduser("~"))
+        jsonl = (
+            home / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
+        )
+        if not jsonl.is_file() or jsonl.stat().st_size < 10:
+            return None
+        try:
+            message_count = 0
+            created_at: Optional[datetime] = None
+            with open(jsonl, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = _json.loads(line)
+                    except ValueError:
+                        continue
+                    if obj.get("type") == "user":
+                        message_count += 1
+                    if created_at is None and "timestamp" in obj:
+                        ts = obj["timestamp"]
+                        if isinstance(ts, str):
+                            try:
+                                created_at = datetime.fromisoformat(
+                                    ts.replace("Z", "+00:00")
+                                )
+                            except ValueError:
+                                pass
+            return {
+                "message_count": message_count,
+                "created_at": created_at,
+            }
+        except Exception:
+            return None
 
     async def cleanup_expired_sessions(self) -> int:
         """Remove expired sessions."""

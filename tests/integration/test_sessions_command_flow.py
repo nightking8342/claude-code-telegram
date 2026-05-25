@@ -56,6 +56,7 @@ def _fake_context(storage, user_id, current_directory=PROJ):
     context.user_data = {"current_directory": current_directory}
     settings = MagicMock()
     settings.approved_directory = current_directory
+    settings.session_timeout_hours = 24
     features = MagicMock()
     features.get_session_export.return_value = None
     context.bot_data = {
@@ -286,20 +287,6 @@ class TestResumeCallback:
 
 
 class TestExportCallback:
-    @pytest.mark.asyncio
-    async def test_export_top_shows_format_submenu(self, storage):
-        await _save(storage, 42, PROJ, "export-test")
-        query = _fake_query(42, "sessions:export:export-test")
-        context = _fake_context(storage, 42)
-        await handle_sessions_callback(query, "export:export-test", context)
-        query.edit_message_text.assert_called_once()
-        kb = query.edit_message_text.call_args.kwargs["reply_markup"]
-        cbs = {b.callback_data for row in kb.inline_keyboard for b in row}
-        assert "sessions:export:export-test:md" in cbs
-        assert "sessions:export:export-test:json" in cbs
-        # Cancel goes back to detail
-        assert "sessions:detail:export-test" in cbs
-
     @pytest.mark.asyncio
     async def test_export_md_sends_markdown(self, storage):
         await _save(storage, 42, PROJ, "exp-md")

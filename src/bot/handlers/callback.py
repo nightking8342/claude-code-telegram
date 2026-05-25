@@ -36,7 +36,9 @@ def _safe_filename_fragment(s: str, max_len: int = 40) -> str:
     return cleaned[:max_len] or "session"
 
 
-async def _check_session_ownership(storage, user_id: int, session_id: str) -> str:
+async def _check_session_ownership(
+    storage, user_id: int, session_id: str, project_path: str | None = None
+) -> str:
     """Return one of: ``"owned"``, ``"cross_user"``, ``"missing"``.
 
     The runtime passes a ``SessionRepository`` (``.db``); existing tests pass
@@ -55,6 +57,17 @@ async def _check_session_ownership(storage, user_id: int, session_id: str) -> st
             )
             if (await cursor.fetchone()) is not None:
                 return "cross_user"
+    # Check CLI sessions
+    if project_path:
+        try:
+            cli_sessions = await ClaudeIntegration.scan_cli_sessions(
+                Path(project_path)
+            )
+            for cs in cli_sessions:
+                if cs["session_id"] == session_id:
+                    return "owned"
+        except Exception:
+            pass
     return "missing"
 
 
@@ -1433,6 +1446,8 @@ async def handle_sessions_callback(
             user_id=user_id,
             session_id=session_id,
             back_page=0,
+            session_timeout_hours=settings.session_timeout_hours,
+            project_path=str(current_directory),
         )
         if result is None:
             # Distinguish "cross-user" from "missing" — the session row may
@@ -1485,7 +1500,9 @@ async def handle_sessions_callback(
 
     if sub_action == "view":
         session_id = rest
-        ownership = await _check_session_ownership(storage, user_id, session_id)
+        ownership = await _check_session_ownership(
+            storage, user_id, session_id, str(current_directory)
+        )
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
@@ -1552,7 +1569,9 @@ async def handle_sessions_callback(
 
     if sub_action == "resume":
         session_id = rest
-        ownership = await _check_session_ownership(storage, user_id, session_id)
+        ownership = await _check_session_ownership(
+            storage, user_id, session_id, str(current_directory)
+        )
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
@@ -1590,7 +1609,9 @@ async def handle_sessions_callback(
         else:
             session_id, fmt = rest, ""
 
-        ownership = await _check_session_ownership(storage, user_id, session_id)
+        ownership = await _check_session_ownership(
+            storage, user_id, session_id, str(current_directory)
+        )
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
@@ -1603,32 +1624,6 @@ async def handle_sessions_callback(
             return
         if ownership == "missing":
             await query.answer("session 不存在或已删除")
-            return
-
-        if not fmt:
-            kb = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "📝 Markdown",
-                            callback_data=f"sessions:export:{session_id}:md",
-                        ),
-                        InlineKeyboardButton(
-                            "📄 JSON",
-                            callback_data=f"sessions:export:{session_id}:json",
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "✖ 取消",
-                            callback_data=f"sessions:detail:{session_id}",
-                        )
-                    ],
-                ]
-            )
-            await query.edit_message_text(
-                "选择导出格式：", reply_markup=kb, parse_mode="HTML"
-            )
             return
 
         from ..features.session_export import ExportFormat

@@ -5,6 +5,7 @@ Provides simple interface for bot handlers.
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -289,6 +290,95 @@ class ClaudeIntegration:
                 path=str(jsonl_path),
             )
             return None
+
+    @staticmethod
+    async def scan_cli_sessions(project_path: Path) -> list[dict]:
+        """Scan Claude CLI transcript files for sessions in *project_path*.
+
+        Returns a list of dicts with keys: ``session_id``, ``ai_title``,
+        ``created_at`` (datetime|None), ``message_count``, ``last_used``
+        (datetime from file mtime).
+        """
+        import os
+        from types import SimpleNamespace
+
+        encoded = ClaudeIntegration._encode_project_path(project_path)
+        home = Path(os.path.expanduser("~"))
+        proj_dir = home / ".claude" / "projects" / encoded
+
+        if not proj_dir.is_dir():
+            return []
+
+        loop = asyncio.get_running_loop()
+
+        def _scan() -> list[dict]:
+            results: list[dict] = []
+            for jsonl_path in proj_dir.glob("*.jsonl"):
+                if jsonl_path.stat().st_size < 10:
+                    continue
+                session_id = jsonl_path.stem
+                ai_title: Optional[str] = None
+                created_at = None
+                message_count = 0
+                is_cli = False
+                entrypoint_checked = False
+                try:
+                    with open(jsonl_path, encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                obj = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            # entrypoint is on the first (system) entry;
+                            # skip bot-created sessions (sdk-py / sdk-cli).
+                            if not entrypoint_checked:
+                                entrypoint_checked = True
+                                ep = obj.get("entrypoint")
+                                if ep is not None and ep != "cli":
+                                    break
+                                is_cli = True
+                            obj_type = obj.get("type")
+                            if obj_type == "ai-title":
+                                t = obj.get("aiTitle")
+                                if t:
+                                    ai_title = t
+                            elif obj_type == "user":
+                                message_count += 1
+                            if created_at is None and "timestamp" in obj:
+                                ts = obj["timestamp"]
+                                if isinstance(ts, str):
+                                    try:
+                                        created_at = datetime.fromisoformat(
+                                            ts.replace("Z", "+00:00")
+                                        )
+                                    except ValueError:
+                                        pass
+                    if not is_cli:
+                        continue
+                except Exception:
+                    logger.debug(
+                        "Failed to scan CLI session",
+                        path=str(jsonl_path),
+                    )
+                    continue
+                mtime = datetime.fromtimestamp(
+                    jsonl_path.stat().st_mtime, tz=UTC
+                )
+                results.append(
+                    {
+                        "session_id": session_id,
+                        "ai_title": ai_title,
+                        "created_at": created_at,
+                        "message_count": message_count,
+                        "last_used": mtime,
+                    }
+                )
+            return results
+
+        return await loop.run_in_executor(None, _scan)
 
     async def continue_session(
         self,
