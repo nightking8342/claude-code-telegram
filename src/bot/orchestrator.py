@@ -878,7 +878,7 @@ class MessageOrchestrator:
             session_id: The Claude session UUID.
             project_path: The working directory of the session.
             claude_integration: The ClaudeIntegration facade instance.
-            session_meta: Optional ClaudeSession with last_used, total_turns.
+            session_meta: Optional ClaudeSession with last_used, message_count.
         """
         title = await claude_integration.read_session_title(
             session_id, project_path
@@ -890,9 +890,9 @@ class MessageOrchestrator:
             rel = self._relative_time(getattr(session_meta, "last_used", None))
             if rel:
                 meta_parts.append(rel)
-            turns = getattr(session_meta, "total_turns", 0)
-            if turns:
-                meta_parts.append(f"{turns}轮")
+            msg_count = getattr(session_meta, "message_count", 0)
+            if msg_count:
+                meta_parts.append(f"{msg_count}条")
 
         if title:
             line2_parts = [session_id, dir_name] + meta_parts
