@@ -282,6 +282,7 @@ class ClaudeSDKManager:
         interrupt_event: Optional[asyncio.Event] = None,
         images: Optional[List[Dict[str, str]]] = None,
         hooks: Optional[Dict[str, Any]] = None,
+        permission_mode: Optional[str] = None,
     ) -> ClaudeResponse:
         """Execute Claude Code command via SDK."""
         start_time = asyncio.get_event_loop().time()
@@ -354,6 +355,7 @@ class ClaudeSDKManager:
                 system_prompt=base_prompt,
                 setting_sources=["project"],
                 stderr=_stderr_callback,
+                permission_mode=permission_mode or None,
             )
 
             # Pass MCP server configuration if enabled

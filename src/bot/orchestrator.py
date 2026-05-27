@@ -362,6 +362,7 @@ class MessageOrchestrator:
             ("new", self.agentic_new),
             ("status", self.agentic_status),
             ("verbose", self.agentic_verbose),
+            ("plan", self.agentic_plan),
             ("repo", self.agentic_repo),
             ("provider", self.agentic_provider),
             ("model", self.agentic_model),
@@ -535,6 +536,7 @@ class MessageOrchestrator:
                 BotCommand("new", "Start a fresh session"),
                 BotCommand("status", "Show session status"),
                 BotCommand("verbose", "Set output verbosity (0/1/2)"),
+                BotCommand("plan", "Toggle plan mode (read-only analysis)"),
                 BotCommand("repo", "List repos / switch workspace"),
                 BotCommand("provider", "List/switch API providers"),
                 BotCommand("model", "Show/override model"),
@@ -576,6 +578,7 @@ class MessageOrchestrator:
                 BotCommand("new", "新建会话"),
                 BotCommand("status", "查看会话状态"),
                 BotCommand("verbose", "设置输出详细度 (0/1/2)"),
+                BotCommand("plan", "切换规划模式（只读分析）"),
                 BotCommand("repo", "列出/切换项目目录"),
                 BotCommand("provider", "列出/切换 API 提供商"),
                 BotCommand("model", "查看/切换模型"),
@@ -1043,6 +1046,28 @@ class MessageOrchestrator:
             parse_mode="HTML",
         )
 
+    async def agentic_plan(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Toggle plan mode: /plan — read-only analysis, no edits or commands."""
+        current = context.user_data.get("permission_mode")
+        if current == "plan":
+            context.user_data.pop("permission_mode", None)
+            await update.message.reply_text(
+                "已退出规划模式。下次请求恢复正常权限。",
+                parse_mode="HTML",
+            )
+        else:
+            context.user_data["permission_mode"] = "plan"
+            await update.message.reply_text(
+                "已进入 <b>规划模式</b>。\n\n"
+                "• 可以读取文件、分析代码\n"
+                "• 不能编辑文件、不能执行命令\n"
+                "• 适合先让 Claude 分析方案再动手\n\n"
+                "再次发送 <code>/plan</code> 退出。",
+                parse_mode="HTML",
+            )
+
     def _format_verbose_progress(
         self,
         activity_log: List[Dict[str, Any]],
@@ -1466,6 +1491,7 @@ class MessageOrchestrator:
                 force_new=force_new,
                 interrupt_event=interrupt_event,
                 hooks=auq_hooks,
+                permission_mode=context.user_data.get("permission_mode"),
             )
 
             # New session created successfully — clear the one-shot flag
@@ -1725,6 +1751,7 @@ class MessageOrchestrator:
                 on_stream=on_stream,
                 force_new=force_new,
                 hooks=auq_hooks,
+                permission_mode=context.user_data.get("permission_mode"),
             )
 
             if force_new:
@@ -1940,6 +1967,7 @@ class MessageOrchestrator:
                 force_new=force_new,
                 images=images,
                 hooks=auq_hooks,
+                permission_mode=context.user_data.get("permission_mode"),
             )
         finally:
             heartbeat.cancel()
