@@ -1,6 +1,6 @@
 # Claude Agent SDK (Python) 功能全览
 
-> 基于 `claude-agent-sdk` v0.1.81 官方文档整理。
+> 基于 `claude-agent-sdk` 官方文档整理（当前安装版本 v0.1.81，PyPI 最新 v0.2.87）。
 > 官方文档：https://code.claude.com/docs/en/agent-sdk/python
 
 ## 安装
