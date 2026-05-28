@@ -139,6 +139,7 @@ class MessageOrchestrator:
         self._active_requests: Dict[int, ActiveRequest] = {}
         self._pending_auq: Dict[str, asyncio.Future] = {}
         self._pending_plan: Dict[int, asyncio.Future] = {}  # user_id -> Future
+        self._pending_plan_waiting: Dict[int, Dict[str, Any]] = {}  # user_id -> feedback state
         # user_id -> {"tool_use_id": str, "tid_short": str, "question_text": str}
         # Metadata for "Other" free-text answers; the lock-bypass state lives
         # in StopAwareUpdateProcessor.auq_other_waiting (class-level set).
@@ -1400,6 +1401,26 @@ class MessageOrchestrator:
                 await update.message.reply_text("✅ 已收到你的回答，Claude 继续处理中...")
             return
 
+        # Check if user is providing plan feedback from ExitPlanMode
+        plan_waiting = self._pending_plan_waiting.pop(user_id, None)
+        if plan_waiting:
+            future = plan_waiting["future"]
+            if future and not future.done():
+                future.set_result({"action": "feedback", "feedback": message_text})
+                query = plan_waiting.get("query")
+                if query:
+                    try:
+                        await query.edit_message_text(
+                            f"✏️ 已收到修改意见：{escape_html(message_text)}",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                await update.message.reply_text(
+                    "✅ 已将修改意见发送给 Claude，正在调整方案..."
+                )
+            return
+
         logger.info(
             "Agentic text message",
             user_id=user_id,
@@ -2386,11 +2407,11 @@ class MessageOrchestrator:
                         [
                             InlineKeyboardButton(
                                 "✅ 进入规划",
-                                callback_data=f"plan:{user_id}:approve",
+                                callback_data=f"plan:{user_id}:enter_approve",
                             ),
                             InlineKeyboardButton(
                                 "❌ 取消",
-                                callback_data=f"plan:{user_id}:deny",
+                                callback_data=f"plan:{user_id}:enter_deny",
                             ),
                         ]
                     ]
@@ -2407,9 +2428,9 @@ class MessageOrchestrator:
                 )
 
                 result = await future
-                approved = result.get("approved", False)
+                action = result.get("action", "deny")
 
-                if approved:
+                if action == "approve":
                     return {
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
@@ -2446,13 +2467,84 @@ class MessageOrchestrator:
         async def _exit_plan_hook(
             hook_input: Any, stdin: Any = None, hook_context: Any = None
         ) -> dict:
-            # Auto-approve exit and clear plan state
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
+            future = asyncio.get_event_loop().create_future()
+            orchestrator_ref._pending_plan[user_id] = future
+            try:
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "✅ 允许执行",
+                                callback_data=f"plan:{user_id}:exit_approve",
+                            ),
+                            InlineKeyboardButton(
+                                "❌ 继续规划",
+                                callback_data=f"plan:{user_id}:exit_deny",
+                            ),
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                "✏️ 告诉 Claude 如何修改",
+                                callback_data=f"plan:{user_id}:exit_feedback",
+                            ),
+                        ],
+                    ]
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "📋 <b>Claude 请求退出规划模式</b>\n\n"
+                        "方案已完成，准备开始执行。"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb,
+                )
+                result = await future
+                action = result.get("action", "deny")
+                if action == "approve":
+                    return {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "allow",
+                        }
+                    }
+                if action == "feedback":
+                    return {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "用户要求修改方案",
+                            "additionalContext": (
+                                f"用户对方案的修改意见：{result['feedback']}"
+                            ),
+                        }
+                    }
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "用户要求继续规划",
+                    }
                 }
-            }
+            except asyncio.CancelledError:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "ExitPlanMode 已取消",
+                    }
+                }
+            except Exception as exc:
+                logger.error("ExitPlanMode hook error", error=str(exc))
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": f"处理出错：{exc}",
+                    }
+                }
+            finally:
+                orchestrator_ref._pending_plan.pop(user_id, None)
 
         return {
             "PreToolUse": [
@@ -2464,7 +2556,7 @@ class MessageOrchestrator:
     async def _handle_plan_callback(
         self, query: Any, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle EnterPlanMode approve/deny button callbacks."""
+        """Handle EnterPlanMode / ExitPlanMode button callbacks."""
         await query.answer()
         data = query.data  # "plan:{user_id}:{action}"
         parts = data.split(":")
@@ -2484,8 +2576,9 @@ class MessageOrchestrator:
         if not future or future.done():
             return
 
-        if action == "approve":
-            future.set_result({"approved": True})
+        # EnterPlanMode actions
+        if action == "enter_approve":
+            future.set_result({"action": "approve"})
             try:
                 await query.edit_message_text(
                     "✅ 已进入规划模式。",
@@ -2493,11 +2586,43 @@ class MessageOrchestrator:
                 )
             except Exception:
                 pass
-        elif action == "deny":
-            future.set_result({"approved": False})
+        elif action == "enter_deny":
+            future.set_result({"action": "deny"})
             try:
                 await query.edit_message_text(
                     "❌ 已取消进入规划模式。",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        # ExitPlanMode actions
+        elif action == "exit_approve":
+            future.set_result({"action": "approve"})
+            try:
+                await query.edit_message_text(
+                    "✅ 已退出规划模式，Claude 开始执行。",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        elif action == "exit_deny":
+            future.set_result({"action": "deny"})
+            try:
+                await query.edit_message_text(
+                    "❌ 继续规划模式。",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        elif action == "exit_feedback":
+            # Register user for free-text feedback input
+            self._pending_plan_waiting[target_uid] = {
+                "future": future,
+                "query": query,
+            }
+            try:
+                await query.edit_message_text(
+                    "✏️ 请直接发送你的修改意见，Claude 会根据反馈调整方案。",
                     parse_mode="HTML",
                 )
             except Exception:
