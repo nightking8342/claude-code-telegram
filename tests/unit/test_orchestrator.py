@@ -101,7 +101,7 @@ def test_agentic_registers_commands(agentic_settings, deps):
     commands = [h[0][0].commands for h in cmd_handlers]
 
     expected = {"start", "new", "status", "verbose", "plan", "repo",
-                "provider", "model", "sessions", "restart", "skill"}
+                "provider", "model", "sessions", "restart", "skill", "btw"}
     registered = set()
     for cmd_set in commands:
         registered |= cmd_set
@@ -161,7 +161,7 @@ async def test_agentic_bot_commands(agentic_settings, deps):
     commands = await orchestrator.get_bot_commands()
 
     cmd_names = [c.command for c in commands]
-    for cmd in ["start", "new", "status", "verbose", "repo", "restart", "skill"]:
+    for cmd in ["start", "new", "status", "verbose", "repo", "restart", "skill", "btw"]:
         assert cmd in cmd_names
 
 
@@ -987,3 +987,96 @@ async def test_bot_suffixed_command_not_forwarded(agentic_settings, deps):
     ) as mock_claude:
         await orchestrator._handle_unknown_command(update, context)
         mock_claude.assert_not_called()
+
+
+# --- /btw command tests ---
+
+
+@pytest.mark.asyncio
+async def test_handle_btw_sends_reply(agentic_settings, deps, tmp_dir):
+    """_handle_btw should reply with btw prefix."""
+    orchestrator = MessageOrchestrator(agentic_settings, deps)
+
+    mock_msg = MagicMock()
+    mock_msg.text = "/btw What database does this use?"
+    mock_msg.message_id = 100
+    mock_msg.reply_text = AsyncMock()
+
+    mock_update = MagicMock()
+    mock_update.effective_message = mock_msg
+    mock_update.effective_user.id = 12345
+
+    mock_context = MagicMock()
+    mock_context.bot_data = {
+        "claude_integration": deps["claude_integration"],
+        "storage": deps["storage"],
+        "audit_logger": AsyncMock(),
+    }
+    mock_context.user_data = {
+        "claude_session_id": "test-session-id",
+        "current_directory": str(tmp_dir),
+    }
+
+    deps["claude_integration"].run_btw = AsyncMock(return_value="PostgreSQL 15")
+
+    await orchestrator._handle_btw(mock_update, mock_context)
+
+    mock_msg.reply_text.assert_called_once()
+    call_args = mock_msg.reply_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "\U0001f4a1 btw:" in text
+    assert "PostgreSQL 15" in text
+
+
+@pytest.mark.asyncio
+async def test_handle_btw_no_question_shows_usage(agentic_settings, deps):
+    """_handle_btw without question text should show usage hint."""
+    orchestrator = MessageOrchestrator(agentic_settings, deps)
+
+    mock_msg = MagicMock()
+    mock_msg.text = "/btw"
+    mock_msg.reply_text = AsyncMock()
+
+    mock_update = MagicMock()
+    mock_update.effective_message = mock_msg
+
+    mock_context = MagicMock()
+    mock_context.user_data = {}
+
+    await orchestrator._handle_btw(mock_update, mock_context)
+
+    mock_msg.reply_text.assert_called_once()
+    call_args = mock_msg.reply_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "用法" in text
+
+
+@pytest.mark.asyncio
+async def test_handle_btw_no_session(agentic_settings, deps, tmp_dir):
+    """_handle_btw with no session should return guidance message."""
+    orchestrator = MessageOrchestrator(agentic_settings, deps)
+
+    mock_msg = MagicMock()
+    mock_msg.text = "/btw What is this?"
+    mock_msg.message_id = 50
+    mock_msg.reply_text = AsyncMock()
+
+    mock_update = MagicMock()
+    mock_update.effective_message = mock_msg
+    mock_update.effective_user.id = 12345
+
+    mock_context = MagicMock()
+    mock_context.bot_data = {
+        "claude_integration": deps["claude_integration"],
+        "storage": deps["storage"],
+    }
+    mock_context.user_data = {}  # No session
+
+    deps["claude_integration"].run_btw = AsyncMock(return_value="")
+
+    await orchestrator._handle_btw(mock_update, mock_context)
+
+    mock_msg.reply_text.assert_called_once()
+    call_args = mock_msg.reply_text.call_args
+    text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
+    assert "会话" in text

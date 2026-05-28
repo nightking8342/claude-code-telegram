@@ -372,6 +372,7 @@ class MessageOrchestrator:
             ("sessions", command.sessions_command),
             ("restart", command.restart_command),
             ("skill", self.agentic_skill),
+            ("btw", self._handle_btw),
         ]
         if self.settings.enable_project_threads:
             handlers.append(("sync_threads", command.sync_threads))
@@ -555,6 +556,7 @@ class MessageOrchestrator:
                 BotCommand("sessions", "Browse & resume sessions"),
                 BotCommand("restart", "Restart the bot"),
                 BotCommand("skill", "List or invoke skills"),
+                BotCommand("btw", "Ask a side question (no history)"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
@@ -598,6 +600,7 @@ class MessageOrchestrator:
                 BotCommand("sessions", "浏览并恢复历史会话"),
                 BotCommand("restart", "重启机器人"),
                 BotCommand("skill", "列出或调用技能"),
+                BotCommand("btw", "快速提问（不影响会话历史）"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "同步项目话题"))
@@ -1132,6 +1135,110 @@ class MessageOrchestrator:
             # Has argument — forward to Claude as skill invocation
             skill_text = parts[1]  # "smart-search-cli 今日新闻 top1"
             await self.agentic_text(update, context, text=f"/{skill_text}")
+
+    async def _handle_btw(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /btw <question> -- side question without polluting history."""
+        msg = update.effective_message
+        if not msg or not msg.text:
+            return
+
+        user_id = update.effective_user.id
+
+        # Parse question from command text
+        parts = msg.text.split(maxsplit=1)
+        question = parts[1].strip() if len(parts) > 1 else ""
+
+        if not question:
+            await msg.reply_text(
+                "用法: /btw <你的问题>\n"
+                "示例: /btw 刚才提到的那个配置文件叫什么？"
+            )
+            return
+
+        # Resolve session and working directory
+        session_id = context.user_data.get("claude_session_id", "")
+        working_directory = Path(
+            context.user_data.get("current_directory", self.settings.approved_directory)
+        )
+
+        claude_integration = context.bot_data.get("claude_integration")
+        if not claude_integration:
+            await msg.reply_text("\U0001f4a1 btw: 服务不可用。")
+            return
+
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            answer = await claude_integration.run_btw(
+                question=question,
+                working_directory=working_directory,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+            if not answer:
+                await msg.reply_text(
+                    "\U0001f4a1 btw: 当前没有活跃会话，无法提供上下文相关的回答。\n"
+                    "请先发送一条普通消息建立会话，然后再用 /btw 提问。",
+                    reply_to_message_id=msg.message_id,
+                )
+                return
+
+            # Format response with btw prefix
+            response_text = f"\U0001f4a1 btw: {answer}"
+
+            # Use ResponseFormatter for long message splitting
+            from .utils.formatting import ResponseFormatter
+
+            formatter = ResponseFormatter(self.settings)
+            formatted_messages = formatter.format_claude_response(response_text)
+
+            for i, formatted in enumerate(formatted_messages):
+                if not formatted.text or not formatted.text.strip():
+                    continue
+                await msg.reply_text(
+                    formatted.text,
+                    parse_mode=formatted.parse_mode,
+                    reply_to_message_id=msg.message_id if i == 0 else None,
+                )
+
+            # Audit log
+            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+            audit_logger = context.bot_data.get("audit_logger")
+            if audit_logger:
+                await audit_logger.log_command(
+                    user_id=user_id,
+                    command="btw",
+                    args=[question[:100]],
+                    success=True,
+                )
+
+            logger.info(
+                "/btw completed",
+                user_id=user_id,
+                duration_ms=duration_ms,
+                answer_length=len(answer),
+            )
+
+        except Exception as exc:
+            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
+            logger.error("/btw failed", user_id=user_id, error=str(exc))
+
+            await msg.reply_text(
+                "\U0001f4a1 btw: 查询出错，请稍后重试。",
+                reply_to_message_id=msg.message_id,
+            )
+
+            audit_logger = context.bot_data.get("audit_logger")
+            if audit_logger:
+                await audit_logger.log_command(
+                    user_id=user_id,
+                    command="btw",
+                    args=[question[:100]],
+                    success=False,
+                )
 
     def _format_verbose_progress(
         self,
