@@ -140,7 +140,9 @@ class MessageOrchestrator:
         self._active_requests: Dict[int, ActiveRequest] = {}
         self._pending_auq: Dict[str, asyncio.Future] = {}
         self._pending_plan: Dict[int, asyncio.Future] = {}  # user_id -> Future
-        self._pending_plan_waiting: Dict[int, Dict[str, Any]] = {}  # user_id -> feedback state
+        self._pending_plan_waiting: Dict[int, Dict[str, Any]] = (
+            {}
+        )  # user_id -> feedback state
         # user_id -> {"tool_use_id": str, "tid_short": str, "question_text": str}
         # Metadata for "Other" free-text answers; the lock-bypass state lives
         # in StopAwareUpdateProcessor.auq_other_waiting (class-level set).
@@ -190,8 +192,7 @@ class MessageOrchestrator:
         if manager is None:
             await self._reject_for_thread_mode(
                 update,
-                "❌ <b>项目话题模式配置错误</b>\n\n"
-                "话题管理器未初始化。",
+                "❌ <b>项目话题模式配置错误</b>\n\n" "话题管理器未初始化。",
             )
             return False
 
@@ -262,8 +263,7 @@ class MessageOrchestrator:
                 session_meta = None
                 try:
                     session_meta = (
-                        await claude_integration.session_manager
-                        .get_or_create_session(
+                        await claude_integration.session_manager.get_or_create_session(
                             update.effective_user.id,
                             current_dir,
                             restored_session_id,
@@ -695,16 +695,16 @@ class MessageOrchestrator:
 
         await update.message.reply_text("会话已重置，请继续。")
 
-    def _build_provider_keyboard(
-        self, pm: Any
-    ) -> InlineKeyboardMarkup:
+    def _build_provider_keyboard(self, pm: Any) -> InlineKeyboardMarkup:
         """Build inline keyboard for provider selection."""
         profiles = pm.list_profiles()
         active_name = pm.get_active_name() or ""
         buttons = []
         for p in profiles:
             label = f"✅ {p.name}" if p.name == active_name else p.name
-            buttons.append(InlineKeyboardButton(label, callback_data=f"provider:{p.name}"))
+            buttons.append(
+                InlineKeyboardButton(label, callback_data=f"provider:{p.name}")
+            )
         return InlineKeyboardMarkup([buttons])  # one row
 
     async def agentic_provider(
@@ -728,7 +728,9 @@ class MessageOrchestrator:
                 lines.append(f"{marker}<code>{p.name}</code>")
             text = "\n".join(lines)
             keyboard = self._build_provider_keyboard(pm)
-            await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+            await update.message.reply_text(
+                text, parse_mode="HTML", reply_markup=keyboard
+            )
             return
 
         # Switch to named profile via text arg
@@ -773,7 +775,7 @@ class MessageOrchestrator:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Show or override the model (supports per-role configuration)."""
-        from ..config.providers import _parse_context_suffix, _VALID_ROLES
+        from ..config.providers import _VALID_ROLES
 
         pm = context.bot_data.get("provider_manager")
         if not pm:
@@ -787,10 +789,14 @@ class MessageOrchestrator:
             model = pm.get_effective_model() or "default"
             ctx_window = pm.get_context_window()
             source = pm.get_model_source()
-            ctx_label = f"{ctx_window // 1_000_000}M" if ctx_window >= 1_000_000 else f"{ctx_window // 1_000}k"
+            ctx_label = (
+                f"{ctx_window // 1_000_000}M"
+                if ctx_window >= 1_000_000
+                else f"{ctx_window // 1_000}k"
+            )
             lines = [
                 "<b>🤖 模型配置</b>\n",
-                f"<b>⚙️ 默认</b>",
+                "<b>⚙️ 默认</b>",
                 f"<code>{model}</code>（{source}）",
                 f"窗口 {ctx_label}",
             ]
@@ -800,9 +806,7 @@ class MessageOrchestrator:
                 for role in _VALID_ROLES:
                     rm = roles.get(role)
                     if rm:
-                        role_lines.append(
-                            f"<code>{role}</code> → <code>{rm}</code>"
-                        )
+                        role_lines.append(f"<code>{role}</code> → <code>{rm}</code>")
                 if role_lines:
                     lines.append("\n" + "\n".join(role_lines))
             await update.message.reply_text("\n".join(lines), parse_mode="HTML")
@@ -900,9 +904,7 @@ class MessageOrchestrator:
             claude_integration: The ClaudeIntegration facade instance.
             session_meta: Optional ClaudeSession with last_used, message_count.
         """
-        title = await claude_integration.read_session_title(
-            session_id, project_path
-        )
+        title = await claude_integration.read_session_title(session_id, project_path)
         dir_name = project_path.name or str(project_path)
 
         meta_parts: List[str] = []
@@ -926,7 +928,9 @@ class MessageOrchestrator:
         """Return (branch, staged_count, modified_count) for a git repo."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "git", "branch", "--show-current",
+                "git",
+                "branch",
+                "--show-current",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=repo_path,
@@ -935,22 +939,27 @@ class MessageOrchestrator:
             branch = stdout.decode().strip() or "HEAD"
 
             proc2 = await asyncio.create_subprocess_exec(
-                "git", "diff", "--cached", "--numstat",
+                "git",
+                "diff",
+                "--cached",
+                "--numstat",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=repo_path,
             )
             out2, _ = await asyncio.wait_for(proc2.communicate(), timeout=5)
-            staged = len([l for l in out2.decode().strip().split("\n") if l])
+            staged = len([line for line in out2.decode().strip().split("\n") if line])
 
             proc3 = await asyncio.create_subprocess_exec(
-                "git", "diff", "--numstat",
+                "git",
+                "diff",
+                "--numstat",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=repo_path,
             )
             out3, _ = await asyncio.wait_for(proc3.communicate(), timeout=5)
-            modified = len([l for l in out3.decode().strip().split("\n") if l])
+            modified = len([line for line in out3.decode().strip().split("\n") if line])
 
             return branch, staged, modified
         except Exception:
@@ -971,6 +980,7 @@ class MessageOrchestrator:
             model_name = ""
             if pm:
                 from ..config.providers import _parse_context_suffix
+
                 raw = pm.get_effective_model() or ""
                 model_name, _ = _parse_context_suffix(raw)
                 model_name = model_name.replace("claude-", "")
@@ -1128,9 +1138,7 @@ class MessageOrchestrator:
                 desc = f" — {html.escape(s.description)}" if s.description else ""
                 lines.append(f"<code>/skill {s.name}</code>{desc}")
             lines.append("\n点击命令复制到剪贴板。")
-            await update.message.reply_text(
-                "\n".join(lines), parse_mode="HTML"
-            )
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         else:
             # Has argument — forward to Claude as skill invocation
             skill_text = parts[1]  # "smart-search-cli 今日新闻 top1"
@@ -1152,8 +1160,7 @@ class MessageOrchestrator:
 
         if not question:
             await msg.reply_text(
-                "用法: /btw <你的问题>\n"
-                "示例: /btw 刚才提到的那个配置文件叫什么？"
+                "用法: /btw <你的问题>\n" "示例: /btw 刚才提到的那个配置文件叫什么？"
             )
             return
 
@@ -1531,7 +1538,10 @@ class MessageOrchestrator:
         return caption_sent
 
     async def agentic_text(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE, text: Optional[str] = None
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        text: Optional[str] = None,
     ) -> None:
         """Direct Claude passthrough. Simple progress. No suggestions."""
         user_id = update.effective_user.id
@@ -1560,7 +1570,9 @@ class MessageOrchestrator:
                         )
                     except Exception:
                         pass
-                await update.message.reply_text("✅ 已收到你的回答，Claude 继续处理中...")
+                await update.message.reply_text(
+                    "✅ 已收到你的回答，Claude 继续处理中..."
+                )
             return
 
         # Check if user is providing plan feedback from ExitPlanMode
@@ -1696,7 +1708,6 @@ class MessageOrchestrator:
             if force_new:
                 context.user_data["force_new_session"] = False
 
-
             context.user_data["claude_session_id"] = claude_response.session_id
             context.user_data["last_usage"] = claude_response.usage
             context.user_data["last_model_usage"] = getattr(
@@ -1731,9 +1742,7 @@ class MessageOrchestrator:
 
             response_content = claude_response.content
             if claude_response.interrupted:
-                response_content = (
-                    response_content or ""
-                ) + "\n\n_（用户已中断）_"
+                response_content = (response_content or "") + "\n\n_（用户已中断）_"
 
             formatted_messages = formatter.format_claude_response(response_content)
 
@@ -1910,9 +1919,7 @@ class MessageOrchestrator:
         # Process with Claude
         claude_integration = context.bot_data.get("claude_integration")
         if not claude_integration:
-            await progress_msg.edit_text(
-                "Claude 集成不可用，请检查配置。"
-            )
+            await progress_msg.edit_text("Claude 集成不可用，请检查配置。")
             return
 
         current_dir = context.user_data.get(
@@ -2134,9 +2141,7 @@ class MessageOrchestrator:
         """Run a media-derived prompt through Claude and send responses."""
         claude_integration = context.bot_data.get("claude_integration")
         if not claude_integration:
-            await progress_msg.edit_text(
-                "Claude 集成不可用，请检查配置。"
-            )
+            await progress_msg.edit_text("Claude 集成不可用，请检查配置。")
             return
 
         current_dir = context.user_data.get(
@@ -2309,10 +2314,8 @@ class MessageOrchestrator:
             session_id = None
             existing_session = None
             if claude_integration:
-                existing_session = (
-                    await claude_integration._find_resumable_session(
-                        update.effective_user.id, target_path
-                    )
+                existing_session = await claude_integration._find_resumable_session(
+                    update.effective_user.id, target_path
                 )
                 if existing_session:
                     session_id = existing_session.session_id
@@ -2322,8 +2325,7 @@ class MessageOrchestrator:
             git_badge = " (git)" if is_git else ""
 
             switch_msg = (
-                f"已切换到 <code>{escape_html(target_name)}/</code>"
-                f"{git_badge}"
+                f"已切换到 <code>{escape_html(target_name)}/</code>" f"{git_badge}"
             )
 
             if session_id and claude_integration:
@@ -2338,9 +2340,7 @@ class MessageOrchestrator:
                     parse_mode="HTML",
                 )
             else:
-                await update.message.reply_text(
-                    switch_msg, parse_mode="HTML"
-                )
+                await update.message.reply_text(switch_msg, parse_mode="HTML")
             return
 
         # No args — list repos
@@ -2401,9 +2401,7 @@ class MessageOrchestrator:
 
         # Only the requesting user can stop their own request
         if query.from_user.id != target_user_id:
-            await query.answer(
-                "只有发起请求的用户才能停止。", show_alert=True
-            )
+            await query.answer("只有发起请求的用户才能停止。", show_alert=True)
             return
 
         active = self._active_requests.get(target_user_id)
@@ -2427,9 +2425,7 @@ class MessageOrchestrator:
     #  AskUserQuestion → Telegram inline keyboard                         #
     # ------------------------------------------------------------------ #
 
-    def _build_auq_hook(
-        self, bot: Any, chat_id: int, user_id: int
-    ) -> Dict[str, Any]:
+    def _build_auq_hook(self, bot: Any, chat_id: int, user_id: int) -> Dict[str, Any]:
         """Build a PreToolUse hook dict for AskUserQuestion.
 
         Returns a dict suitable for passing as ``hooks`` to
@@ -2520,9 +2516,7 @@ class MessageOrchestrator:
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
-                        "permissionDecisionReason": (
-                            "AskUserQuestion was cancelled"
-                        ),
+                        "permissionDecisionReason": ("AskUserQuestion was cancelled"),
                     }
                 }
             except Exception as exc:
@@ -2540,9 +2534,7 @@ class MessageOrchestrator:
                 orchestrator_ref._pending_auq.pop(tool_use_id, None)
 
         return {
-            "PreToolUse": [
-                HookMatcher(matcher="AskUserQuestion", hooks=[_auq_hook])
-            ]
+            "PreToolUse": [HookMatcher(matcher="AskUserQuestion", hooks=[_auq_hook])]
         }
 
     def _build_plan_mode_hook(
@@ -2807,9 +2799,7 @@ class MessageOrchestrator:
     ) -> None:
         """Send AskUserQuestion as Telegram inline keyboard."""
         header_line = f"<b>{escape_html(header)}</b>\n" if header else ""
-        mode_hint = (
-            "\n<i>可多选，选完点「确认选择」</i>" if multi_select else ""
-        )
+        mode_hint = "\n<i>可多选，选完点「确认选择」</i>" if multi_select else ""
         text = (
             f"🤔 {header_line}<b>Claude 想问你：</b>\n"
             f"{escape_html(question_text)}{mode_hint}"
@@ -2920,9 +2910,7 @@ class MessageOrchestrator:
 
         # Only the original user can answer
         if query.from_user.id != auq_meta["user_id"]:
-            await query.answer(
-                "只有原始用户才能回答此问题。", show_alert=True
-            )
+            await query.answer("只有原始用户才能回答此问题。", show_alert=True)
             return
 
         tool_use_id = auq_meta["tool_use_id"]
@@ -2962,18 +2950,14 @@ class MessageOrchestrator:
             # Toggle or confirm
             if action == "confirm":
                 # Gather selected options
-                states = getattr(self, "_auq_multi_state", {}).get(
-                    tool_use_id, []
-                )
+                states = getattr(self, "_auq_multi_state", {}).get(tool_use_id, [])
                 selected = [
                     options[i].get("label", f"选项 {i + 1}")
                     for i in range(min(len(options), 4))
                     if i < len(states) and states[i]
                 ]
                 if not selected:
-                    await query.answer(
-                        "请至少选择一个选项。", show_alert=True
-                    )
+                    await query.answer("请至少选择一个选项。", show_alert=True)
                     return
 
                 # Resolve future
@@ -2991,9 +2975,7 @@ class MessageOrchestrator:
                 await query.answer()
 
                 # Cleanup
-                getattr(self, "_auq_multi_state", {}).pop(
-                    tool_use_id, None
-                )
+                getattr(self, "_auq_multi_state", {}).pop(tool_use_id, None)
             else:
                 # Toggle a single option
                 idx = int(action)
@@ -3001,9 +2983,7 @@ class MessageOrchestrator:
                     await query.answer("无效选项。", show_alert=True)
                     return
 
-                states = getattr(self, "_auq_multi_state", {}).get(
-                    tool_use_id, []
-                )
+                states = getattr(self, "_auq_multi_state", {}).get(tool_use_id, [])
                 if idx < len(states):
                     states[idx] = not states[idx]
 
@@ -3012,9 +2992,7 @@ class MessageOrchestrator:
                 row: List[InlineKeyboardButton] = []
                 for i, opt in enumerate(options[:4]):
                     label = opt.get("label", f"选项 {i + 1}")
-                    checked = (
-                        "☑" if i < len(states) and states[i] else "☐"
-                    )
+                    checked = "☑" if i < len(states) and states[i] else "☐"
                     row.append(
                         InlineKeyboardButton(
                             f"{checked} {label}",
@@ -3036,9 +3014,7 @@ class MessageOrchestrator:
                 )
 
                 try:
-                    await query.edit_message_reply_markup(
-                        InlineKeyboardMarkup(buttons)
-                    )
+                    await query.edit_message_reply_markup(InlineKeyboardMarkup(buttons))
                 except Exception:
                     pass
                 await query.answer()
@@ -3089,10 +3065,8 @@ class MessageOrchestrator:
         session_id = None
         existing_session = None
         if claude_integration:
-            existing_session = (
-                await claude_integration._find_resumable_session(
-                    query.from_user.id, new_path
-                )
+            existing_session = await claude_integration._find_resumable_session(
+                query.from_user.id, new_path
             )
             if existing_session:
                 session_id = existing_session.session_id
@@ -3102,8 +3076,7 @@ class MessageOrchestrator:
         git_badge = " (git)" if is_git else ""
 
         switch_msg = (
-            f"已切换到 <code>{escape_html(project_name)}/</code>"
-            f"{git_badge}"
+            f"已切换到 <code>{escape_html(project_name)}/</code>" f"{git_badge}"
         )
 
         if session_id and claude_integration:
@@ -3118,9 +3091,7 @@ class MessageOrchestrator:
                 parse_mode="HTML",
             )
         else:
-            await query.edit_message_text(
-                switch_msg, parse_mode="HTML"
-            )
+            await query.edit_message_text(switch_msg, parse_mode="HTML")
 
         # Audit log
         audit_logger = context.bot_data.get("audit_logger")

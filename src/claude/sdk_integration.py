@@ -817,15 +817,11 @@ class ClaudeSDKManager:
             try:
                 await asyncio.wait_for(_run_client(), timeout=btw_timeout)
             except asyncio.TimeoutError:
-                raise ClaudeTimeoutError(
-                    f"/btw timed out after {btw_timeout}s"
-                )
+                raise ClaudeTimeoutError(f"/btw timed out after {btw_timeout}s")
             except asyncio.CancelledError:
                 raise
 
-            duration_ms = int(
-                (asyncio.get_event_loop().time() - start_time) * 1000
-            )
+            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
 
             content = ""
             for message in messages:
@@ -862,26 +858,16 @@ class ClaudeSDKManager:
             ) from exc
         except ClaudeSDKError as exc:
             logger.error("Claude SDK error in /btw", error=str(exc))
-            raise ClaudeProcessError(
-                f"Claude SDK error: {exc}"
-            ) from exc
+            raise ClaudeProcessError(f"Claude SDK error: {exc}") from exc
         except CLINotFoundError as exc:
-            raise ClaudeProcessError(
-                f"Claude CLI not found: {exc}"
-            ) from exc
+            raise ClaudeProcessError(f"Claude CLI not found: {exc}") from exc
         except ProcessError as exc:
-            raise ClaudeProcessError(
-                f"Claude CLI process error: {exc}"
-            ) from exc
+            raise ClaudeProcessError(f"Claude CLI process error: {exc}") from exc
         except CLIConnectionError as exc:
-            raise ClaudeProcessError(
-                f"Claude CLI connection error: {exc}"
-            ) from exc
+            raise ClaudeProcessError(f"Claude CLI connection error: {exc}") from exc
         except Exception as exc:
             logger.error("/btw unexpected error", error=str(exc))
-            raise ClaudeProcessError(
-                f"/btw unexpected error: {exc}"
-            ) from exc
+            raise ClaudeProcessError(f"/btw unexpected error: {exc}") from exc
         finally:
             if saved_env:
                 self.provider_manager.restore_environ(saved_env)

@@ -180,9 +180,7 @@ class ClaudeIntegration:
 
         # If no session_id provided, look up the most recent session
         if not session_id and self.session_manager:
-            resumable = await self._find_resumable_session(
-                user_id, working_directory
-            )
+            resumable = await self._find_resumable_session(user_id, working_directory)
             if resumable:
                 session_id = resumable.session_id
                 logger.info(
@@ -277,9 +275,7 @@ class ClaudeIntegration:
         )
 
     @staticmethod
-    async def read_session_title(
-        session_id: str, project_path: Path
-    ) -> Optional[str]:
+    async def read_session_title(session_id: str, project_path: Path) -> Optional[str]:
         """Read the AI-generated title from Claude's transcript JSONL.
 
         Scans the file in reverse to find the *last* ``ai-title`` entry
@@ -290,9 +286,7 @@ class ClaudeIntegration:
 
         encoded = ClaudeIntegration._encode_project_path(project_path)
         home = Path(os.path.expanduser("~"))
-        jsonl_path = (
-            home / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
-        )
+        jsonl_path = home / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
 
         if not jsonl_path.is_file():
             return None
@@ -341,7 +335,6 @@ class ClaudeIntegration:
         (datetime from file mtime).
         """
         import os
-        from types import SimpleNamespace
 
         encoded = ClaudeIntegration._encode_project_path(project_path)
         home = Path(os.path.expanduser("~"))
@@ -405,9 +398,7 @@ class ClaudeIntegration:
                         path=str(jsonl_path),
                     )
                     continue
-                mtime = datetime.fromtimestamp(
-                    jsonl_path.stat().st_mtime, tz=UTC
-                )
+                mtime = datetime.fromtimestamp(jsonl_path.stat().st_mtime, tz=UTC)
                 results.append(
                     {
                         "session_id": session_id,
