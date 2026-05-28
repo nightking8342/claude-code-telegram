@@ -163,6 +163,42 @@ class ClaudeIntegration:
             )
             raise
 
+    async def run_btw(
+        self,
+        question: str,
+        working_directory: Path,
+        user_id: int,
+        session_id: str,
+    ) -> str:
+        """Run a /btw side question. Returns the answer text."""
+        logger.info(
+            "Running /btw",
+            user_id=user_id,
+            session_id=session_id,
+            question_length=len(question),
+        )
+
+        # If no session_id provided, look up the most recent session
+        if not session_id and self.session_manager:
+            resumable = await self._find_resumable_session(
+                user_id, working_directory
+            )
+            if resumable:
+                session_id = resumable.session_id
+                logger.info(
+                    "Found resumable session for /btw",
+                    session_id=session_id,
+                )
+
+        if not session_id:
+            return ""
+
+        return await self.sdk_manager.execute_btw(
+            question=question,
+            working_directory=working_directory,
+            session_id=session_id,
+        )
+
     async def _execute(
         self,
         prompt: str,

@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -294,3 +294,69 @@ class TestEmptySessionIdWarning:
 
         # Session ID should be empty on the response
         assert not result.session_id
+
+
+class TestRunBtw:
+    """Tests for the run_btw() facade method."""
+
+    async def test_run_btw_delegates_to_sdk(self, facade):
+        """run_btw should delegate to sdk_manager.execute_btw()."""
+        facade.sdk_manager.execute_btw = AsyncMock(return_value="PostgreSQL 15")
+
+        result = await facade.run_btw(
+            question="What database?",
+            working_directory=Path("/tmp"),
+            user_id=12345,
+            session_id="test-session-id",
+        )
+
+        assert result == "PostgreSQL 15"
+        facade.sdk_manager.execute_btw.assert_called_once_with(
+            question="What database?",
+            working_directory=Path("/tmp"),
+            session_id="test-session-id",
+        )
+
+    async def test_run_btw_looks_up_session_when_none(self, facade, session_manager):
+        """run_btw should look up recent session when session_id is empty."""
+        project = Path("/test/project")
+        user_id = 12345
+
+        # Seed a session so _find_resumable_session finds it
+        existing = ClaudeSession(
+            session_id="found-session-id",
+            user_id=user_id,
+            project_path=project,
+            created_at=datetime.utcnow(),
+            last_used=datetime.utcnow(),
+        )
+        await session_manager.storage.save_session(existing)
+        session_manager.active_sessions[existing.session_id] = existing
+
+        facade.sdk_manager.execute_btw = AsyncMock(return_value="answer")
+
+        result = await facade.run_btw(
+            question="test",
+            working_directory=project,
+            user_id=user_id,
+            session_id="",
+        )
+
+        assert result == "answer"
+        facade.sdk_manager.execute_btw.assert_called_once()
+        call_kwargs = facade.sdk_manager.execute_btw.call_args[1]
+        assert call_kwargs["session_id"] == "found-session-id"
+
+    async def test_run_btw_returns_empty_when_no_session(self, facade):
+        """run_btw should return empty string when no session available."""
+        facade.session_manager = None
+
+        result = await facade.run_btw(
+            question="test",
+            working_directory=Path("/tmp"),
+            user_id=12345,
+            session_id="",
+        )
+
+        assert result == ""
+        facade.sdk_manager.execute_btw.assert_not_called()
