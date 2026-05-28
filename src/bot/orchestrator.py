@@ -1049,21 +1049,21 @@ class MessageOrchestrator:
     async def agentic_plan(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """One-shot plan mode: next request is read-only, then auto-clears."""
+        """Toggle plan mode: persistent read-only until /plan again (same as CLI)."""
         current = context.user_data.get("permission_mode")
         if current == "plan":
             context.user_data.pop("permission_mode", None)
             await update.message.reply_text(
-                "已取消规划模式。",
+                "已退出规划模式，恢复正常权限。",
                 parse_mode="HTML",
             )
         else:
             context.user_data["permission_mode"] = "plan"
             await update.message.reply_text(
-                "已进入 <b>规划模式</b>（仅下一条消息生效）。\n\n"
+                "已进入 <b>规划模式</b>。\n\n"
                 "• 可以读取文件、分析代码\n"
                 "• 不能编辑文件、不能执行命令\n"
-                "• 分析完成后，直接发送执行指令即可",
+                "• 发送 <code>/plan</code> 退出后可执行修改",
                 parse_mode="HTML",
             )
 
@@ -1497,8 +1497,6 @@ class MessageOrchestrator:
             if force_new:
                 context.user_data["force_new_session"] = False
 
-            # Clear plan mode after the request (one-shot)
-            context.user_data.pop("permission_mode", None)
 
             context.user_data["claude_session_id"] = claude_response.session_id
             context.user_data["last_usage"] = claude_response.usage
