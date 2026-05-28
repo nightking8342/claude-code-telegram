@@ -2478,7 +2478,7 @@ class MessageOrchestrator:
                                 callback_data=f"plan:{user_id}:exit_approve",
                             ),
                             InlineKeyboardButton(
-                                "❌ 继续规划",
+                                "❌ 不执行",
                                 callback_data=f"plan:{user_id}:exit_deny",
                             ),
                         ],
@@ -2522,8 +2522,11 @@ class MessageOrchestrator:
                 return {
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": "用户要求继续规划",
+                        "permissionDecision": "allow",
+                        "additionalContext": (
+                            "用户不想执行这个方案，请不要执行任何修改。"
+                            "等待用户的进一步指示。"
+                        ),
                     }
                 }
             except asyncio.CancelledError:
@@ -2609,7 +2612,7 @@ class MessageOrchestrator:
             future.set_result({"action": "deny"})
             try:
                 await query.edit_message_text(
-                    "❌ 继续规划模式。",
+                    "❌ 不执行计划，已退出规划模式。",
                     parse_mode="HTML",
                 )
             except Exception:
