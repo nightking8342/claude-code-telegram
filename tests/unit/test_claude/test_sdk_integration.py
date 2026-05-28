@@ -1184,3 +1184,189 @@ class TestClaudeMdLoading:
 
         opts = captured[0]
         assert opts.setting_sources == ["project"]
+
+
+class TestExecuteBtw:
+    """Tests for execute_btw() — /btw side question method."""
+
+    @pytest.fixture
+    def config(self, tmp_path):
+        return Settings(
+            telegram_bot_token="test:token",
+            telegram_bot_username="testbot",
+            approved_directory=tmp_path,
+            claude_timeout_seconds=2,
+            enable_mcp=False,
+        )
+
+    @pytest.fixture
+    def sdk_manager(self, config):
+        return ClaudeSDKManager(config)
+
+    async def test_execute_btw_returns_content(self, sdk_manager):
+        """execute_btw should return text from ResultMessage with no tools."""
+        mock_factory = _mock_client_factory(
+            _make_result_message(result="PostgreSQL 15"),
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            response = await sdk_manager.execute_btw(
+                question="What database?",
+                working_directory=Path("/tmp"),
+                session_id="existing-session-id",
+            )
+
+        assert response == "PostgreSQL 15"
+
+    async def test_execute_btw_passes_correct_options(self, sdk_manager):
+        """execute_btw should set allowed_tools=[], max_turns=1, resume=session_id."""
+        captured_options = []
+        mock_factory = _mock_client_factory(
+            _make_result_message(result="answer"),
+            capture_options=captured_options,
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            await sdk_manager.execute_btw(
+                question="test question",
+                working_directory=Path("/tmp"),
+                session_id="resume-me",
+            )
+
+        assert len(captured_options) == 1
+        opts = captured_options[0]
+        assert opts.allowed_tools == []
+        assert opts.max_turns == 1
+        assert opts.resume == "resume-me"
+
+    async def test_execute_btw_handles_timeout(self, sdk_manager):
+        """execute_btw should raise ClaudeTimeoutError on timeout."""
+        from src.claude.exceptions import ClaudeTimeoutError
+
+        client = AsyncMock()
+        client.connect = AsyncMock()
+        client.disconnect = AsyncMock()
+        client.query = AsyncMock()
+
+        async def hanging_receive():
+            await asyncio.sleep(60)
+            yield
+
+        query_mock = AsyncMock()
+        query_mock.receive_messages = hanging_receive
+        client._query = query_mock
+
+        # Patch the timeout to 1s so the test completes quickly
+        with patch("src.claude.sdk_integration.ClaudeSDKClient", return_value=client):
+            with patch("src.claude.sdk_integration.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+                with pytest.raises(ClaudeTimeoutError):
+                    await sdk_manager.execute_btw(
+                        question="test",
+                        working_directory=Path("/tmp"),
+                        session_id="test-session",
+                    )
+
+    async def test_execute_btw_handles_connection_error(self, sdk_manager):
+        """execute_btw should raise ClaudeProcessError on CLIConnectionError."""
+        from claude_agent_sdk import CLIConnectionError
+
+        from src.claude.exceptions import ClaudeProcessError
+
+        client = AsyncMock()
+        client.connect = AsyncMock(side_effect=CLIConnectionError("fail"))
+        client.disconnect = AsyncMock()
+        client.query = AsyncMock()
+
+        with patch("src.claude.sdk_integration.ClaudeSDKClient", return_value=client):
+            with pytest.raises(ClaudeProcessError):
+                await sdk_manager.execute_btw(
+                    question="test",
+                    working_directory=Path("/tmp"),
+                    session_id="test-session",
+                )
+
+    async def test_execute_btw_falls_back_to_assistant_messages(self, sdk_manager):
+        """execute_btw should fall back to AssistantMessage text when ResultMessage.result is None."""
+        mock_factory = _mock_client_factory(
+            _make_assistant_message("Extracted answer"),
+            _make_result_message(result=None),
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            response = await sdk_manager.execute_btw(
+                question="test",
+                working_directory=Path("/tmp"),
+                session_id="test-session",
+            )
+
+        assert response == "Extracted answer"
+
+    async def test_execute_btw_loads_claude_md(self, sdk_manager, tmp_path):
+        """execute_btw should load CLAUDE.md into system_prompt."""
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("# BTW Rules\nBe concise.")
+
+        captured_options = []
+        mock_factory = _mock_client_factory(
+            _make_result_message(result="ok"),
+            capture_options=captured_options,
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            await sdk_manager.execute_btw(
+                question="test",
+                working_directory=tmp_path,
+                session_id="test-session",
+            )
+
+        assert len(captured_options) == 1
+        assert "# BTW Rules" in captured_options[0].system_prompt
+        assert "Be concise." in captured_options[0].system_prompt
+
+    async def test_execute_btw_no_mcp_servers(self, sdk_manager):
+        """execute_btw should NOT configure MCP servers."""
+        captured_options = []
+        mock_factory = _mock_client_factory(
+            _make_result_message(result="ok"),
+            capture_options=captured_options,
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            await sdk_manager.execute_btw(
+                question="test",
+                working_directory=Path("/tmp"),
+                session_id="test-session",
+            )
+
+        assert len(captured_options) == 1
+        assert captured_options[0].mcp_servers == {}
+
+    async def test_execute_btw_no_can_use_tool(self, sdk_manager):
+        """execute_btw should NOT wire can_use_tool callback (no tools)."""
+        captured_options = []
+        mock_factory = _mock_client_factory(
+            _make_result_message(result="ok"),
+            capture_options=captured_options,
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            await sdk_manager.execute_btw(
+                question="test",
+                working_directory=Path("/tmp"),
+                session_id="test-session",
+            )
+
+        assert len(captured_options) == 1
+        assert captured_options[0].can_use_tool is None

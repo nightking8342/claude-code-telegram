@@ -729,6 +729,153 @@ class ClaudeSDKManager:
             if saved_env:
                 self.provider_manager.restore_environ(saved_env)
 
+    async def execute_btw(
+        self,
+        question: str,
+        working_directory: Path,
+        session_id: str,
+    ) -> str:
+        """Execute a /btw side question — no tools, single turn, resume context."""
+        start_time = asyncio.get_event_loop().time()
+        btw_timeout = 30  # seconds
+
+        logger.info(
+            "Starting /btw side question",
+            working_directory=str(working_directory),
+            session_id=session_id,
+            question_length=len(question),
+        )
+
+        try:
+            saved_env: Dict[str, Optional[str]] = {}
+            if self.provider_manager:
+                saved_env = self.provider_manager.apply_to_environ()
+
+            stderr_lines: List[str] = []
+
+            def _stderr_callback(line: str) -> None:
+                stderr_lines.append(line)
+
+            base_prompt = (
+                f"All file operations must stay within {working_directory}. "
+                "Use relative paths."
+            )
+            claude_md_path = Path(working_directory) / "CLAUDE.md"
+            if claude_md_path.exists():
+                base_prompt += "\n\n" + claude_md_path.read_text(encoding="utf-8")
+
+            if self.provider_manager:
+                effective_model = self.provider_manager.get_effective_model() or None
+            else:
+                effective_model = self.config.claude_model or None
+
+            options = ClaudeAgentOptions(
+                max_turns=1,
+                model=effective_model,
+                max_budget_usd=self.config.claude_max_cost_per_request,
+                cwd=str(working_directory),
+                allowed_tools=[],
+                disallowed_tools=[],
+                cli_path=self.config.claude_cli_path or None,
+                include_partial_messages=False,
+                sandbox={
+                    "enabled": self.config.sandbox_enabled,
+                    "autoAllowBashIfSandboxed": True,
+                    "excludedCommands": self.config.sandbox_excluded_commands or [],
+                },
+                system_prompt=base_prompt,
+                setting_sources=["project"],
+                stderr=_stderr_callback,
+            )
+            options.resume = session_id
+
+            messages: List[Message] = []
+
+            async def _run_client() -> None:
+                client = ClaudeSDKClient(options)
+                try:
+                    await client.connect()
+                    await client.query(question)
+
+                    async for raw_data in client._query.receive_messages():
+                        try:
+                            message = parse_message(raw_data)
+                        except MessageParseError as e:
+                            logger.debug(
+                                "Skipping unparseable message in /btw",
+                                error=str(e),
+                            )
+                            continue
+
+                        messages.append(message)
+
+                        if isinstance(message, ResultMessage):
+                            break
+                finally:
+                    await client.disconnect()
+
+            try:
+                await asyncio.wait_for(_run_client(), timeout=btw_timeout)
+            except asyncio.TimeoutError:
+                raise ClaudeTimeoutError(
+                    f"/btw timed out after {btw_timeout}s"
+                )
+            except asyncio.CancelledError:
+                raise
+
+            duration_ms = int(
+                (asyncio.get_event_loop().time() - start_time) * 1000
+            )
+
+            content = ""
+            for message in messages:
+                if isinstance(message, ResultMessage):
+                    result_content = getattr(message, "result", None)
+                    if result_content is not None:
+                        content = str(result_content).strip()
+                    break
+
+            if not content:
+                text_parts: List[str] = []
+                for msg in messages:
+                    if isinstance(msg, AssistantMessage):
+                        msg_content = getattr(msg, "content", []) or []
+                        for block in msg_content:
+                            if isinstance(block, TextBlock):
+                                text_parts.append(block.text)
+                content = "\n".join(text_parts).strip()
+
+            logger.info(
+                "/btw completed",
+                duration_ms=duration_ms,
+                content_length=len(content),
+            )
+
+            return content
+
+        except (ClaudeTimeoutError, ClaudeProcessError, ClaudeMCPError):
+            raise
+        except CLINotFoundError as exc:
+            raise ClaudeProcessError(
+                f"Claude CLI not found: {exc}"
+            ) from exc
+        except ProcessError as exc:
+            raise ClaudeProcessError(
+                f"Claude CLI process error: {exc}"
+            ) from exc
+        except CLIConnectionError as exc:
+            raise ClaudeProcessError(
+                f"Claude CLI connection error: {exc}"
+            ) from exc
+        except Exception as exc:
+            logger.error("/btw unexpected error", error=str(exc))
+            raise ClaudeProcessError(
+                f"/btw unexpected error: {exc}"
+            ) from exc
+        finally:
+            if self.provider_manager and saved_env:
+                self.provider_manager.restore_environ(saved_env)
+
     async def _handle_stream_message(
         self, message: Message, stream_callback: Callable[[StreamUpdate], None]
     ) -> None:
