@@ -6,6 +6,7 @@ classic mode, delegates to existing full-featured handlers.
 """
 
 import asyncio
+import html
 import os
 import re
 import time
@@ -370,6 +371,7 @@ class MessageOrchestrator:
             ("model", self.agentic_model),
             ("sessions", command.sessions_command),
             ("restart", command.restart_command),
+            ("skill", self.agentic_skill),
         ]
         if self.settings.enable_project_threads:
             handlers.append(("sync_threads", command.sync_threads))
@@ -552,6 +554,7 @@ class MessageOrchestrator:
                 BotCommand("model", "Show/override model"),
                 BotCommand("sessions", "Browse & resume sessions"),
                 BotCommand("restart", "Restart the bot"),
+                BotCommand("skill", "List or invoke skills"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
@@ -594,6 +597,7 @@ class MessageOrchestrator:
                 BotCommand("model", "查看/切换模型"),
                 BotCommand("sessions", "浏览并恢复历史会话"),
                 BotCommand("restart", "重启机器人"),
+                BotCommand("skill", "列出或调用技能"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "同步项目话题"))
@@ -1069,8 +1073,7 @@ class MessageOrchestrator:
         if current == "plan":
             # Already in plan mode — if there's a prompt, just send it
             if prompt_text:
-                update.message.text = prompt_text
-                await self.agentic_text(update, context)
+                await self.agentic_text(update, context, text=prompt_text)
                 return
             # No prompt — exit plan mode
             context.user_data.pop("permission_mode", None)
@@ -1085,8 +1088,7 @@ class MessageOrchestrator:
 
         if prompt_text:
             # Enter plan mode + send prompt to Claude
-            update.message.text = prompt_text
-            await self.agentic_text(update, context)
+            await self.agentic_text(update, context, text=prompt_text)
         else:
             # Just toggle on
             await update.message.reply_text(
@@ -1097,6 +1099,39 @@ class MessageOrchestrator:
                 "💡 Claude 也会在需要时自动请求进入规划模式。",
                 parse_mode="HTML",
             )
+
+    async def agentic_skill(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """List available skills or invoke one. /skill [name]"""
+        raw = (update.message.text or "").strip()
+        parts = raw.split(None, 1)
+
+        if len(parts) <= 1:
+            # No argument — list all discovered skills
+            from src.claude.skills import discover_skills
+
+            skills = discover_skills()
+            if not skills:
+                await update.message.reply_text(
+                    "未发现已安装的 Skills。\n\n"
+                    "可通过 CLI 安装：<code>claude plugin install &lt;name&gt;</code>",
+                    parse_mode="HTML",
+                )
+                return
+
+            lines = ["📋 可用 Skills:\n"]
+            for s in skills:
+                desc = f" — {html.escape(s.description)}" if s.description else ""
+                lines.append(f"<code>/skill {s.name}</code>{desc}")
+            lines.append("\n点击命令复制到剪贴板。")
+            await update.message.reply_text(
+                "\n".join(lines), parse_mode="HTML"
+            )
+        else:
+            # Has argument — forward to Claude as skill invocation
+            skill_text = parts[1]  # "smart-search-cli 今日新闻 top1"
+            await self.agentic_text(update, context, text=f"/{skill_text}")
 
     def _format_verbose_progress(
         self,
@@ -1389,11 +1424,11 @@ class MessageOrchestrator:
         return caption_sent
 
     async def agentic_text(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, text: Optional[str] = None
     ) -> None:
         """Direct Claude passthrough. Simple progress. No suggestions."""
         user_id = update.effective_user.id
-        message_text = update.message.text
+        message_text = text if text is not None else update.message.text
 
         # Check if user is answering an "Other" question from AskUserQuestion
         waiting = self._auq_waiting_other.pop(user_id, None)

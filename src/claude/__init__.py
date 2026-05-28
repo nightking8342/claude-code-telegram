@@ -9,6 +9,7 @@ from .exceptions import (
 )
 from .facade import ClaudeIntegration
 from .sdk_integration import ClaudeResponse, ClaudeSDKManager, StreamUpdate
+from .skills import SkillInfo, discover_skills
 from .session import (
     ClaudeSession,
     SessionManager,
@@ -31,4 +32,7 @@ __all__ = [
     "SessionManager",
     "SessionStorage",
     "ClaudeSession",
+    # Skills discovery
+    "SkillInfo",
+    "discover_skills",
 ]
