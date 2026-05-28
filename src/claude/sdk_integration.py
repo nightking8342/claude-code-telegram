@@ -855,6 +855,16 @@ class ClaudeSDKManager:
 
         except (ClaudeTimeoutError, ClaudeProcessError, ClaudeMCPError):
             raise
+        except CLIJSONDecodeError as exc:
+            logger.error("Claude SDK JSON decode error in /btw", error=str(exc))
+            raise ClaudeParsingError(
+                f"Failed to decode Claude response: {exc}"
+            ) from exc
+        except ClaudeSDKError as exc:
+            logger.error("Claude SDK error in /btw", error=str(exc))
+            raise ClaudeProcessError(
+                f"Claude SDK error: {exc}"
+            ) from exc
         except CLINotFoundError as exc:
             raise ClaudeProcessError(
                 f"Claude CLI not found: {exc}"
@@ -873,7 +883,7 @@ class ClaudeSDKManager:
                 f"/btw unexpected error: {exc}"
             ) from exc
         finally:
-            if self.provider_manager and saved_env:
+            if saved_env:
                 self.provider_manager.restore_environ(saved_env)
 
     async def _handle_stream_message(
