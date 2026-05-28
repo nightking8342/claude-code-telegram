@@ -138,6 +138,7 @@ class MessageOrchestrator:
         self.deps = deps
         self._active_requests: Dict[int, ActiveRequest] = {}
         self._pending_auq: Dict[str, asyncio.Future] = {}
+        self._pending_plan: Dict[int, asyncio.Future] = {}  # user_id -> Future
         # user_id -> {"tool_use_id": str, "tid_short": str, "question_text": str}
         # Metadata for "Other" free-text answers; the lock-bypass state lives
         # in StopAwareUpdateProcessor.auq_other_waiting (class-level set).
@@ -433,6 +434,14 @@ class MessageOrchestrator:
             CallbackQueryHandler(
                 self._inject_deps(self._handle_auq_callback),
                 pattern=r"^auq:",
+            )
+        )
+
+        # Plan mode (EnterPlanMode) button callbacks
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_plan_callback),
+                pattern=r"^plan:",
             )
         )
 
@@ -1063,7 +1072,8 @@ class MessageOrchestrator:
                 "已进入 <b>规划模式</b>。\n\n"
                 "• 可以读取文件、分析代码\n"
                 "• 不能编辑文件、不能执行命令\n"
-                "• 发送 <code>/plan</code> 退出后可执行修改",
+                "• 发送 <code>/plan</code> 退出后可执行修改\n\n"
+                "💡 Claude 也会在需要时自动请求进入规划模式。",
                 parse_mode="HTML",
             )
 
@@ -1480,6 +1490,12 @@ class MessageOrchestrator:
         auq_hooks = self._build_auq_hook(
             bot=context.bot, chat_id=chat.id, user_id=user_id
         )
+        plan_hooks = self._build_plan_mode_hook(
+            bot=context.bot, chat_id=chat.id, user_id=user_id
+        )
+        merged_hooks: Dict[str, Any] = {}
+        for key in set(list(auq_hooks.keys()) + list(plan_hooks.keys())):
+            merged_hooks[key] = auq_hooks.get(key, []) + plan_hooks.get(key, [])
         try:
             claude_response = await claude_integration.run_command(
                 prompt=message_text,
@@ -1489,7 +1505,7 @@ class MessageOrchestrator:
                 on_stream=on_stream,
                 force_new=force_new,
                 interrupt_event=interrupt_event,
-                hooks=auq_hooks,
+                hooks=merged_hooks,
                 permission_mode=context.user_data.get("permission_mode"),
             )
 
@@ -1742,6 +1758,12 @@ class MessageOrchestrator:
         auq_hooks = self._build_auq_hook(
             bot=context.bot, chat_id=chat.id, user_id=user_id
         )
+        plan_hooks = self._build_plan_mode_hook(
+            bot=context.bot, chat_id=chat.id, user_id=user_id
+        )
+        merged_hooks: Dict[str, Any] = {}
+        for key in set(list(auq_hooks.keys()) + list(plan_hooks.keys())):
+            merged_hooks[key] = auq_hooks.get(key, []) + plan_hooks.get(key, [])
         try:
             claude_response = await claude_integration.run_command(
                 prompt=prompt,
@@ -1750,7 +1772,7 @@ class MessageOrchestrator:
                 session_id=session_id,
                 on_stream=on_stream,
                 force_new=force_new,
-                hooks=auq_hooks,
+                hooks=merged_hooks,
                 permission_mode=context.user_data.get("permission_mode"),
             )
 
@@ -1957,6 +1979,12 @@ class MessageOrchestrator:
         auq_hooks = self._build_auq_hook(
             bot=context.bot, chat_id=chat.id, user_id=user_id
         )
+        plan_hooks = self._build_plan_mode_hook(
+            bot=context.bot, chat_id=chat.id, user_id=user_id
+        )
+        merged_hooks: Dict[str, Any] = {}
+        for key in set(list(auq_hooks.keys()) + list(plan_hooks.keys())):
+            merged_hooks[key] = auq_hooks.get(key, []) + plan_hooks.get(key, [])
         try:
             claude_response = await claude_integration.run_command(
                 prompt=prompt,
@@ -1966,7 +1994,7 @@ class MessageOrchestrator:
                 on_stream=on_stream,
                 force_new=force_new,
                 images=images,
-                hooks=auq_hooks,
+                hooks=merged_hooks,
                 permission_mode=context.user_data.get("permission_mode"),
             )
         finally:
@@ -2333,6 +2361,147 @@ class MessageOrchestrator:
                 HookMatcher(matcher="AskUserQuestion", hooks=[_auq_hook])
             ]
         }
+
+    def _build_plan_mode_hook(
+        self, bot: Any, chat_id: int, user_id: int
+    ) -> Dict[str, Any]:
+        """Build PreToolUse hooks for EnterPlanMode / ExitPlanMode.
+
+        EnterPlanMode: sends Telegram buttons for user approval.
+        ExitPlanMode: auto-approves and clears plan state.
+        """
+        from claude_agent_sdk import HookMatcher  # type: ignore[import-untyped]
+
+        orchestrator_ref = self
+
+        async def _enter_plan_hook(
+            hook_input: Any, stdin: Any = None, hook_context: Any = None
+        ) -> dict:
+            future: asyncio.Future = asyncio.get_event_loop().create_future()
+            orchestrator_ref._pending_plan[user_id] = future
+
+            try:
+                kb = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "✅ 进入规划",
+                                callback_data=f"plan:{user_id}:approve",
+                            ),
+                            InlineKeyboardButton(
+                                "❌ 取消",
+                                callback_data=f"plan:{user_id}:deny",
+                            ),
+                        ]
+                    ]
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "📋 <b>Claude 请求进入规划模式</b>\n\n"
+                        "• 只读分析，不修改文件\n"
+                        "• 适合先看方案再决定是否执行"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb,
+                )
+
+                result = await future
+                approved = result.get("approved", False)
+
+                if approved:
+                    return {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "allow",
+                        }
+                    }
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "用户拒绝进入规划模式",
+                    }
+                }
+            except asyncio.CancelledError:
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "EnterPlanMode 已取消",
+                    }
+                }
+            except Exception as exc:
+                logger.error("EnterPlanMode hook error", error=str(exc))
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": f"处理出错：{exc}",
+                    }
+                }
+            finally:
+                orchestrator_ref._pending_plan.pop(user_id, None)
+
+        async def _exit_plan_hook(
+            hook_input: Any, stdin: Any = None, hook_context: Any = None
+        ) -> dict:
+            # Auto-approve exit and clear plan state
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                }
+            }
+
+        return {
+            "PreToolUse": [
+                HookMatcher(matcher="EnterPlanMode", hooks=[_enter_plan_hook]),
+                HookMatcher(matcher="ExitPlanMode", hooks=[_exit_plan_hook]),
+            ]
+        }
+
+    async def _handle_plan_callback(
+        self, query: Any, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle EnterPlanMode approve/deny button callbacks."""
+        await query.answer()
+        data = query.data  # "plan:{user_id}:{action}"
+        parts = data.split(":")
+        if len(parts) != 3:
+            return
+        _, uid_str, action = parts
+        try:
+            target_uid = int(uid_str)
+        except ValueError:
+            return
+
+        if query.from_user.id != target_uid:
+            await query.answer("只有发起请求的用户才能操作。")
+            return
+
+        future = self._pending_plan.get(target_uid)
+        if not future or future.done():
+            return
+
+        if action == "approve":
+            future.set_result({"approved": True})
+            try:
+                await query.edit_message_text(
+                    "✅ 已进入规划模式。",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        elif action == "deny":
+            future.set_result({"approved": False})
+            try:
+                await query.edit_message_text(
+                    "❌ 已取消进入规划模式。",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
 
     async def _send_auq_message(
         self,
