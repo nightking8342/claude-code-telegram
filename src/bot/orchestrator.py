@@ -1059,16 +1059,36 @@ class MessageOrchestrator:
     async def agentic_plan(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Toggle plan mode: persistent read-only until /plan again (same as CLI)."""
+        """Toggle plan mode. /plan [prompt] enters plan mode and sends prompt."""
+        # Extract text after /plan command
+        raw = (update.message.text or "").strip()
+        parts = raw.split(None, 1)
+        prompt_text = parts[1] if len(parts) > 1 else None
+
         current = context.user_data.get("permission_mode")
         if current == "plan":
+            # Already in plan mode — if there's a prompt, just send it
+            if prompt_text:
+                update.message.text = prompt_text
+                await self.agentic_text(update, context)
+                return
+            # No prompt — exit plan mode
             context.user_data.pop("permission_mode", None)
             await update.message.reply_text(
                 "已退出规划模式，恢复正常权限。",
                 parse_mode="HTML",
             )
+            return
+
+        # Enter plan mode
+        context.user_data["permission_mode"] = "plan"
+
+        if prompt_text:
+            # Enter plan mode + send prompt to Claude
+            update.message.text = prompt_text
+            await self.agentic_text(update, context)
         else:
-            context.user_data["permission_mode"] = "plan"
+            # Just toggle on
             await update.message.reply_text(
                 "已进入 <b>规划模式</b>。\n\n"
                 "• 可以读取文件、分析代码\n"
