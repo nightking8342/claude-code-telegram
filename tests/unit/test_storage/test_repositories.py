@@ -670,3 +670,19 @@ class TestSessionRepositoryPagination:
     @pytest.mark.asyncio
     async def test_load_session_missing(self, session_repo):
         assert await session_repo.load_session("does-not-exist", 42) is None
+
+    @pytest.mark.asyncio
+    async def test_btw_fork_session_registry(self, session_repo):
+        await session_repo.record_btw_fork_session(
+            session_id="btw-fork",
+            parent_session_id="parent",
+            user_id=42,
+            project_path="/proj",
+        )
+
+        assert await session_repo.is_btw_fork_session("btw-fork", user_id=42)
+        assert not await session_repo.is_btw_fork_session("btw-fork", user_id=99)
+        assert await session_repo.get_btw_fork_session_ids(42, "/proj") == {
+            "btw-fork"
+        }
+        assert await session_repo.get_btw_fork_session_ids(42, "/other") == set()

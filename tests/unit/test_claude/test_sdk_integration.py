@@ -1,6 +1,7 @@
 """Test Claude SDK integration."""
 
 import asyncio
+import json
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,6 +21,7 @@ from src.claude.sdk_integration import (
     ClaudeResponse,
     ClaudeSDKManager,
     StreamUpdate,
+    _EphemeralBtwConfig,
     _make_can_use_tool_callback,
 )
 from src.config.settings import Settings
@@ -601,8 +603,8 @@ class TestClaudeSandboxSettings:
         assert len(captured_options) == 1
         assert captured_options[0].allowed_tools == ["Read", "Write", "Bash"]
 
-    async def test_disable_tool_validation_sets_allowed_tools_none(self, tmp_path):
-        """allowed_tools=None when DISABLE_TOOL_VALIDATION=true."""
+    async def test_disable_tool_validation_sets_empty_tool_lists(self, tmp_path):
+        """allowed_tools=[] when DISABLE_TOOL_VALIDATION=true."""
         config = Settings(
             telegram_bot_token="test:token",
             telegram_bot_username="testbot",
@@ -630,8 +632,8 @@ class TestClaudeSandboxSettings:
             )
 
         assert len(captured_options) == 1
-        assert captured_options[0].allowed_tools is None
-        assert captured_options[0].disallowed_tools is None
+        assert captured_options[0].allowed_tools == []
+        assert captured_options[0].disallowed_tools == []
 
     async def test_tool_validation_enabled_passes_configured_tools(self, tmp_path):
         """allowed/disallowed_tools passed when DISABLE_TOOL_VALIDATION=false."""
@@ -1168,8 +1170,10 @@ class TestClaudeMdLoading:
         assert "Use relative paths." in opts.system_prompt
         assert "# Project Rules" not in opts.system_prompt
 
-    async def test_setting_sources_includes_project(self, sdk_manager, tmp_path):
-        """setting_sources=['project'] is passed to ClaudeAgentOptions."""
+    async def test_setting_sources_include_user_and_project(
+        self, sdk_manager, tmp_path
+    ):
+        """setting_sources includes user and project for main Claude runs."""
         captured: list = []
         mock_factory = _mock_client_factory(
             _make_assistant_message("ok"),
@@ -1183,7 +1187,54 @@ class TestClaudeMdLoading:
             await sdk_manager.execute_command(prompt="test", working_directory=tmp_path)
 
         opts = captured[0]
-        assert opts.setting_sources == ["project"]
+        assert opts.setting_sources == ["user", "project"]
+
+    async def test_provider_overlay_passed_as_settings(self, config, tmp_path):
+        """Active provider's overlay is passed via options.settings (flag layer).
+
+        This overrides ~/.claude/settings.json's env block while
+        setting_sources still inherits user skills/memory.
+        """
+        from src.config.providers import ProviderManager
+
+        storage = tmp_path / "providers.json"
+        storage.write_text(
+            json.dumps(
+                {
+                    "active": "cpa",
+                    "model_override": None,
+                    "profiles": {
+                        "cpa": {
+                            "name": "cpa",
+                            "base_url": "https://cpa.example",
+                            "auth_token": "tok-cpa",
+                            "api_key": None,
+                            "default_model": "mimo[1m]",
+                            "opus_model": None,
+                            "sonnet_model": None,
+                            "haiku_model": None,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        pm = ProviderManager(config, storage_path=storage)
+        manager = ClaudeSDKManager(config, provider_manager=pm)
+
+        captured: list = []
+        mock_factory = _mock_client_factory(
+            _make_assistant_message("ok"),
+            _make_result_message(),
+            capture_options=captured,
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            await manager.execute_command(prompt="test", working_directory=tmp_path)
+
+        assert captured[0].settings == str(pm.settings_overlay_path())
 
 
 class TestExecuteBtw:
@@ -1203,6 +1254,30 @@ class TestExecuteBtw:
     def sdk_manager(self, config):
         return ClaudeSDKManager(config)
 
+    @pytest.fixture(autouse=True)
+    def ephemeral_btw_config(self, tmp_path):
+        """Keep /btw unit tests off the real Claude config directory."""
+
+        def _prepare(working_directory, parent_session_id):
+            config_dir = tmp_path / "btw-config"
+            config_dir.mkdir(exist_ok=True)
+            return _EphemeralBtwConfig(
+                path=config_dir,
+                parent_session_available=bool(parent_session_id),
+            )
+
+        with (
+            patch(
+                "src.claude.sdk_integration._prepare_ephemeral_btw_config",
+                side_effect=_prepare,
+            ),
+            patch(
+                "src.claude.sdk_integration._cleanup_ephemeral_btw_config",
+                new_callable=AsyncMock,
+            ),
+        ):
+            yield
+
     async def test_execute_btw_returns_content(self, sdk_manager):
         """execute_btw should return text from ResultMessage with no tools."""
         mock_factory = _mock_client_factory(
@@ -1218,10 +1293,10 @@ class TestExecuteBtw:
                 session_id="existing-session-id",
             )
 
-        assert response == "PostgreSQL 15"
+        assert response.content == "PostgreSQL 15"
 
     async def test_execute_btw_passes_correct_options(self, sdk_manager):
-        """execute_btw should set allowed_tools=[], max_turns=1, resume=session_id."""
+        """execute_btw should set no tools, max_turns=1, resume+fork."""
         captured_options = []
         mock_factory = _mock_client_factory(
             _make_result_message(result="answer"),
@@ -1239,9 +1314,76 @@ class TestExecuteBtw:
 
         assert len(captured_options) == 1
         opts = captured_options[0]
+        assert opts.tools == []
         assert opts.allowed_tools == []
         assert opts.max_turns == 1
         assert opts.resume == "resume-me"
+        assert opts.fork_session is True
+        assert "CLAUDE_CONFIG_DIR" in opts.env
+
+    async def test_execute_btw_snapshot_only_does_not_resume_or_fork(self, sdk_manager):
+        """Without a parent session, /btw answers from snapshot only."""
+        from src.claude.btw import BtwContextSnapshot
+
+        captured_options = []
+        mock_factory = _mock_client_factory(
+            _make_result_message(session_id="btw-new-session", result="answer"),
+            capture_options=captured_options,
+        )
+        snapshot = BtwContextSnapshot(
+            session_id=None,
+            working_directory=Path("/tmp"),
+            original_prompt="Run tests",
+            elapsed_seconds=12,
+            last_status="Using Bash",
+            current_tool="Bash",
+        )
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", side_effect=mock_factory
+        ):
+            response = await sdk_manager.execute_btw(
+                question="what is happening?",
+                working_directory=Path("/tmp"),
+                runtime_snapshot=snapshot,
+            )
+
+        opts = captured_options[0]
+        assert opts.resume is None
+        assert opts.fork_session is False
+        assert opts.tools == []
+        assert "CLAUDE_CONFIG_DIR" in opts.env
+        assert response.content == "answer"
+        assert response.fork_session_id is None
+        assert response.used_runtime_snapshot is True
+
+    async def test_execute_btw_missing_parent_without_snapshot_returns_empty(
+        self, sdk_manager, tmp_path
+    ):
+        """A stale parent id should not resume against real persistent storage."""
+        client_factory = MagicMock()
+
+        with (
+            patch(
+                "src.claude.sdk_integration._prepare_ephemeral_btw_config",
+                return_value=_EphemeralBtwConfig(
+                    path=tmp_path / "btw-missing-parent",
+                    parent_session_available=False,
+                ),
+            ),
+            patch(
+                "src.claude.sdk_integration.ClaudeSDKClient",
+                side_effect=client_factory,
+            ),
+        ):
+            response = await sdk_manager.execute_btw(
+                question="test question",
+                working_directory=Path("/tmp"),
+                session_id="missing-session",
+            )
+
+        assert response.content == ""
+        client_factory.assert_not_called()
 
     async def test_execute_btw_handles_timeout(self, sdk_manager):
         """execute_btw should raise ClaudeTimeoutError on timeout."""
@@ -1262,13 +1404,23 @@ class TestExecuteBtw:
 
         # Patch the timeout to 1s so the test completes quickly
         with patch("src.claude.sdk_integration.ClaudeSDKClient", return_value=client):
-            with patch("src.claude.sdk_integration.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            sdk_manager.config.claude_btw_timeout_seconds = 7
+
+            async def timeout_wait_for(coro, *, timeout):
+                coro.close()
+                raise asyncio.TimeoutError
+
+            with patch(
+                "src.claude.sdk_integration.asyncio.wait_for",
+                side_effect=timeout_wait_for,
+            ) as wait_for_mock:
                 with pytest.raises(ClaudeTimeoutError):
                     await sdk_manager.execute_btw(
                         question="test",
                         working_directory=Path("/tmp"),
                         session_id="test-session",
                     )
+            assert wait_for_mock.call_args.kwargs["timeout"] == 7
 
     async def test_execute_btw_handles_connection_error(self, sdk_manager):
         """execute_btw should raise ClaudeProcessError on CLIConnectionError."""
@@ -1305,7 +1457,7 @@ class TestExecuteBtw:
                 session_id="test-session",
             )
 
-        assert response == "Extracted answer"
+        assert response.content == "Extracted answer"
 
     async def test_execute_btw_loads_claude_md(self, sdk_manager, tmp_path):
         """execute_btw should load CLAUDE.md into system_prompt."""

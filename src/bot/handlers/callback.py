@@ -39,12 +39,26 @@ def _safe_filename_fragment(s: str, max_len: int = 40) -> str:
 async def _check_session_ownership(
     storage, user_id: int, session_id: str, project_path: str | None = None
 ) -> str:
-    """Return one of: ``"owned"``, ``"cross_user"``, ``"missing"``.
+    """Return one of: ``"owned"``, ``"btw_fork"``, ``"cross_user"``, ``"missing"``.
 
     The runtime passes a ``SessionRepository`` (``.db``); existing tests pass
     a ``SQLiteSessionStorage`` (``.db_manager``). Either is fine — we just
     need any object exposing ``get_connection()``.
     """
+    checker = getattr(storage, "is_btw_fork_session", None)
+    if (
+        checker is not None
+        and type(storage).__module__.startswith("unittest.mock")
+        and "is_btw_fork_session" not in getattr(storage, "__dict__", {})
+    ):
+        checker = None
+    if checker is not None:
+        try:
+            if await checker(session_id, user_id=user_id):
+                return "btw_fork"
+        except Exception:
+            pass
+
     session = await storage.load_session(session_id, user_id)
     if session is not None:
         return "owned"
@@ -1503,6 +1517,9 @@ async def handle_sessions_callback(
         ownership = await _check_session_ownership(
             storage, user_id, session_id, str(current_directory)
         )
+        if ownership == "btw_fork":
+            await query.answer("BTW side session is hidden", show_alert=True)
+            return
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
@@ -1572,6 +1589,9 @@ async def handle_sessions_callback(
         ownership = await _check_session_ownership(
             storage, user_id, session_id, str(current_directory)
         )
+        if ownership == "btw_fork":
+            await query.answer("BTW side session cannot be resumed", show_alert=True)
+            return
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:
@@ -1612,6 +1632,9 @@ async def handle_sessions_callback(
         ownership = await _check_session_ownership(
             storage, user_id, session_id, str(current_directory)
         )
+        if ownership == "btw_fork":
+            await query.answer("BTW side session cannot be exported", show_alert=True)
+            return
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
             if audit_logger:

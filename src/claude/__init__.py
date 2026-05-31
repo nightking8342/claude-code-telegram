@@ -8,6 +8,7 @@ from .exceptions import (
     ClaudeTimeoutError,
 )
 from .facade import ClaudeIntegration
+from .btw import BtwContextSnapshot, BtwResponse
 from .sdk_integration import ClaudeResponse, ClaudeSDKManager, StreamUpdate
 from .skills import SkillInfo, discover_skills
 from .session import (
@@ -25,6 +26,8 @@ __all__ = [
     "ClaudeTimeoutError",
     # Main integration
     "ClaudeIntegration",
+    "BtwContextSnapshot",
+    "BtwResponse",
     # Core components
     "ClaudeSDKManager",
     "ClaudeResponse",

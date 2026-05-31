@@ -147,7 +147,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Configuration System (TODO-2)
 - Pydantic Settings v2 with environment variable loading
-- Environment-specific overrides (development, testing, production)
 - Feature flags system for dynamic functionality control
 - Comprehensive validation with cross-field dependencies
 

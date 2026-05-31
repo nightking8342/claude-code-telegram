@@ -3,7 +3,7 @@
 import json
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -11,7 +11,12 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-_ENV_KEYS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL")
+_ENV_KEYS = (
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_MODEL",
+)
 
 # Context window suffixes: [1m] = 1,000,000 tokens, [200k] = 200,000, etc.
 _CONTEXT_SUFFIX_RE = re.compile(r"\[(\d+)(k|m)\]$", re.IGNORECASE)
@@ -92,9 +97,12 @@ class ProviderManager:
                     count=len(self._profiles),
                     active=self._active_name,
                 )
+                self._write_overlay()
                 return
             except (json.JSONDecodeError, TypeError) as exc:
-                logger.warning("Failed to parse providers.json, recreating", error=str(exc))
+                logger.warning(
+                    "Failed to parse providers.json, recreating", error=str(exc)
+                )
 
         self._auto_create_default()
 
@@ -105,7 +113,10 @@ class ProviderManager:
             "model_override": self._model_override,
             "profiles": {n: asdict(p) for n, p in self._profiles.items()},
         }
-        self._storage_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        self._storage_path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        self._write_overlay()
         logger.debug("Saved provider profiles", path=str(self._storage_path))
 
     def _auto_create_default(self) -> None:
@@ -135,7 +146,9 @@ class ProviderManager:
 
     def switch_profile(self, name: str) -> ProviderProfile:
         if name not in self._profiles:
-            raise KeyError(f"Provider '{name}' not found. Available: {', '.join(self._profiles)}")
+            raise KeyError(
+                f"Provider '{name}' not found. Available: {', '.join(self._profiles)}"
+            )
         self._active_name = name
         self._model_override = None  # clear override when switching provider
         self._save()
@@ -266,3 +279,56 @@ class ProviderManager:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+    # ── Settings overlay (highest-priority "flag" layer) ─────────
+
+    def settings_overlay_path(self) -> Path:
+        """Path to the generated Claude ``--settings`` overlay file.
+
+        Passed to ``ClaudeAgentOptions.settings`` so the active profile's
+        provider/model env vars sit in the highest-priority settings layer,
+        overriding ``~/.claude/settings.json`` while ``setting_sources`` still
+        inherits skills/memory/plugins from user settings.
+        """
+        return self._storage_path.parent / "provider-cli-settings.json"
+
+    def build_env_overlay(self) -> Dict[str, str]:
+        """Build the ``env`` block pinning the active profile's provider/model.
+
+        Only fields the active profile defines are included; unset (None)
+        fields are omitted so they keep inheriting from user settings.
+        """
+        active = self.get_active()
+        if not active:
+            return {}
+        env: Dict[str, str] = {}
+        if active.base_url:
+            env["ANTHROPIC_BASE_URL"] = active.base_url
+        if active.auth_token:
+            env["ANTHROPIC_AUTH_TOKEN"] = active.auth_token
+        if active.api_key:
+            env["ANTHROPIC_API_KEY"] = active.api_key
+        model = self.get_effective_model()
+        if model:
+            env["ANTHROPIC_MODEL"] = model
+        for role, env_key in _ROLE_ENV_MAP.items():
+            role_model = getattr(active, f"{role}_model", None)
+            if role_model:
+                env[env_key] = role_model
+        return env
+
+    def _write_overlay(self) -> None:
+        """Persist (or remove) the ``--settings`` overlay JSON file."""
+        overlay_path = self.settings_overlay_path()
+        env = self.build_env_overlay()
+        try:
+            if env:
+                overlay_path.parent.mkdir(parents=True, exist_ok=True)
+                overlay_path.write_text(
+                    json.dumps({"env": env}, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+            else:
+                overlay_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Failed to write provider settings overlay", error=str(exc))

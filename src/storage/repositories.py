@@ -251,6 +251,58 @@ class SessionRepository:
             row = await cursor.fetchone()
             return SessionModel.from_row(row) if row else None
 
+    async def record_btw_fork_session(
+        self,
+        session_id: str,
+        parent_session_id: Optional[str],
+        user_id: int,
+        project_path: str,
+    ) -> None:
+        """Record a /btw fork session so UI flows can hide it."""
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT OR REPLACE INTO btw_fork_sessions
+                (session_id, parent_session_id, user_id, project_path, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    parent_session_id,
+                    user_id,
+                    project_path,
+                    datetime.now(UTC),
+                ),
+            )
+            await conn.commit()
+
+    async def is_btw_fork_session(
+        self, session_id: str, user_id: Optional[int] = None
+    ) -> bool:
+        """Return True when session_id belongs to a recorded /btw fork."""
+        async with self.db.get_connection() as conn:
+            query = "SELECT 1 FROM btw_fork_sessions WHERE session_id = ?"
+            params: list = [session_id]
+            if user_id is not None:
+                query += " AND user_id = ?"
+                params.append(user_id)
+            cursor = await conn.execute(query, params)
+            return (await cursor.fetchone()) is not None
+
+    async def get_btw_fork_session_ids(
+        self, user_id: int, project_path: Optional[str] = None
+    ) -> set[str]:
+        """Return recorded /btw fork ids for a user and optional project."""
+        async with self.db.get_connection() as conn:
+            query = "SELECT session_id FROM btw_fork_sessions WHERE user_id = ?"
+            params: list = [user_id]
+            if project_path is not None:
+                query += " AND project_path = ?"
+                params.append(project_path)
+            cursor = await conn.execute(query, params)
+            rows = await cursor.fetchall()
+            return {str(row[0]) for row in rows}
+
     async def cleanup_old_sessions(self, days: int = 30) -> int:
         """Mark old sessions as inactive."""
         async with self.db.get_connection() as conn:

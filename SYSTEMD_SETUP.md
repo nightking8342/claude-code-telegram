@@ -2,7 +2,7 @@
 
 This guide shows how to run the Claude Code Telegram Bot as a persistent systemd user service.
 
-**⚠️ SECURITY NOTE:** Before setting up the service, ensure your `.env` file has `DEVELOPMENT_MODE=false` and `ENVIRONMENT=production` for secure operation.
+**⚠️ SECURITY NOTE:** Before setting up the service, ensure your `.env` file explicitly sets production-safe values such as `DEVELOPMENT_MODE=false`, `DEBUG=false`, and strict rate/cost limits.
 
 ## Quick Setup
 

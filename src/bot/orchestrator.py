@@ -33,6 +33,7 @@ from telegram.ext import (
     filters,
 )
 
+from ..claude.btw import BtwContextSnapshot
 from ..claude.sdk_integration import StreamUpdate
 from ..config.settings import Settings
 from ..projects import PrivateTopicsUnavailableError
@@ -45,6 +46,11 @@ from .utils.image_extractor import (
 )
 
 logger = structlog.get_logger()
+
+_BTW_COMMAND_TEXT_RE = re.compile(
+    r"^/btw(?:@[A-Za-z0-9_]+)?(?P<body>$|\s.*|[^A-Za-z0-9_].*)",
+    re.IGNORECASE,
+)
 
 _MEDIA_TYPE_MAP = {
     "png": "image/png",
@@ -126,9 +132,75 @@ class ActiveRequest:
     """Tracks an in-flight Claude request so it can be interrupted."""
 
     user_id: int
+    session_id: Optional[str] = None
+    working_directory: Optional[Path] = None
+    original_prompt: str = ""
+    started_at: float = field(default_factory=time.time)
     interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
     interrupted: bool = False
     progress_msg: Any = None  # telegram Message object
+    tool_log: List[Dict[str, Any]] = field(default_factory=list)
+    last_status: str = "Starting"
+    current_tool: Optional[str] = None
+    last_assistant_text: str = ""
+    recent_stream_text: str = ""
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def apply_stream_update(self, update_obj: StreamUpdate) -> None:
+        """Update the in-memory /btw runtime snapshot from a stream event."""
+        async with self.lock:
+            metadata = update_obj.metadata or {}
+            session_id = metadata.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                self.session_id = session_id
+
+            if update_obj.tool_calls:
+                for tc in update_obj.tool_calls:
+                    name = str(tc.get("name") or "unknown")
+                    detail = str(tc.get("detail") or "")
+                    self.current_tool = name
+                    self.tool_log.append(
+                        {"kind": "tool", "name": name, "detail": detail}
+                    )
+                self.tool_log = self.tool_log[-20:]
+                self.last_status = f"Using {self.current_tool}"
+
+            if update_obj.type == "assistant" and update_obj.content:
+                text = update_obj.content.strip()
+                if text:
+                    self.last_assistant_text = text[:1000]
+                    first_line = text.split("\n", 1)[0].strip()
+                    if first_line:
+                        self.tool_log.append(
+                            {"kind": "text", "detail": first_line[:160]}
+                        )
+                        self.tool_log = self.tool_log[-20:]
+                    self.last_status = "Thinking"
+
+            if update_obj.type == "stream_delta" and update_obj.content:
+                self.recent_stream_text = (
+                    self.recent_stream_text + update_obj.content
+                )[-2000:]
+                if self.current_tool is None:
+                    self.last_status = "Responding"
+
+            if update_obj.is_error():
+                self.last_status = f"Error: {update_obj.get_error_message()[:160]}"
+
+    async def snapshot(self) -> BtwContextSnapshot:
+        """Copy the current runtime state for a /btw side question."""
+        async with self.lock:
+            return BtwContextSnapshot(
+                session_id=self.session_id,
+                working_directory=self.working_directory or Path.cwd(),
+                original_prompt=self.original_prompt,
+                elapsed_seconds=max(0.0, time.time() - self.started_at),
+                last_status=self.last_status,
+                current_tool=self.current_tool,
+                recent_tools=list(self.tool_log[-10:]),
+                last_assistant_text=self.last_assistant_text,
+                recent_stream_text=self.recent_stream_text,
+            )
 
 
 class MessageOrchestrator:
@@ -379,6 +451,15 @@ class MessageOrchestrator:
 
         # Derive known commands dynamically — avoids drift when new commands are added
         self._known_commands: frozenset[str] = frozenset(cmd for cmd, _ in handlers)
+
+        # Regex fallback for /btw. CommandHandler depends on Telegram command
+        # entities; this catches plain text forms while staying in group 0.
+        app.add_handler(
+            MessageHandler(
+                filters.TEXT & filters.Regex(_BTW_COMMAND_TEXT_RE),
+                self._inject_deps(self._handle_btw),
+            )
+        )
 
         for cmd, handler in handlers:
             app.add_handler(CommandHandler(cmd, self._inject_deps(handler)))
@@ -1147,34 +1228,58 @@ class MessageOrchestrator:
     async def _handle_btw(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle /btw <question> -- side question without polluting history."""
+        """Handle /btw <question> as an immediate side question."""
         msg = update.effective_message
         if not msg or not msg.text:
             return
 
         user_id = update.effective_user.id
-
-        # Parse question from command text
-        parts = msg.text.split(maxsplit=1)
-        question = parts[1].strip() if len(parts) > 1 else ""
+        logger.info(
+            "/btw received",
+            user_id=user_id,
+            message_length=len(msg.text),
+            has_active_request=user_id in self._active_requests,
+        )
+        command_match = _BTW_COMMAND_TEXT_RE.match(msg.text.strip())
+        raw_question = command_match.group("body") if command_match else ""
+        question = raw_question.strip().lstrip(":：,，-").strip()
 
         if not question:
+            logger.info("/btw missing question", user_id=user_id)
             await msg.reply_text(
-                "用法: /btw <你的问题>\n" "示例: /btw 刚才提到的那个配置文件叫什么？"
+                "Usage: /btw <your question>\n"
+                "Example: /btw what config file did you just mention?"
             )
             return
 
-        # Resolve session and working directory
-        session_id = context.user_data.get("claude_session_id", "")
+        active_request = self._active_requests.get(user_id)
+        runtime_snapshot = (
+            await active_request.snapshot() if active_request is not None else None
+        )
+        if runtime_snapshot is not None:
+            # During a brand-new main request the SDK may not have emitted its
+            # session id yet. In that case /btw must answer from the runtime
+            # snapshot only, not accidentally fork the previous chat session.
+            session_id = runtime_snapshot.session_id
+        else:
+            session_id = context.user_data.get("claude_session_id", "")
         working_directory = Path(
-            context.user_data.get("current_directory", self.settings.approved_directory)
+            runtime_snapshot.working_directory
+            if runtime_snapshot
+            else context.user_data.get("current_directory", self.settings.approved_directory)
         )
 
         claude_integration = context.bot_data.get("claude_integration")
         if not claude_integration:
-            await msg.reply_text("\U0001f4a1 btw: 服务不可用。")
+            logger.warning("/btw missing Claude integration", user_id=user_id)
+            await msg.reply_text("btw: Claude integration is not available.")
             return
 
+        progress_msg = await msg.reply_text(
+            "btw: \u56de\u7b54\u4e2d...",
+            reply_to_message_id=msg.message_id,
+        )
+        logger.info("/btw progress message sent", user_id=user_id)
         start_time = asyncio.get_event_loop().time()
 
         try:
@@ -1183,42 +1288,50 @@ class MessageOrchestrator:
                 working_directory=working_directory,
                 user_id=user_id,
                 session_id=session_id,
+                runtime_snapshot=runtime_snapshot,
             )
+            answer_text = getattr(answer, "content", answer)
+            answer_text = str(answer_text or "").strip()
 
-            if not answer:
-                await msg.reply_text(
-                    "\U0001f4a1 btw: 当前没有活跃会话，无法提供上下文相关的回答。\n"
-                    "请先发送一条普通消息建立会话，然后再用 /btw 提问。",
-                    reply_to_message_id=msg.message_id,
+            if not answer_text:
+                await progress_msg.edit_text(
+                    "btw: no active or resumable Claude session is available yet.\n"
+                    "Send a normal message first, then use /btw while it is running."
                 )
                 return
 
-            # Format response with btw prefix
-            response_text = f"\U0001f4a1 btw: {answer}"
+            fork_session_id = getattr(answer, "fork_session_id", None)
 
-            # Use ResponseFormatter for long message splitting
+            response_text = f"btw: {answer_text}"
+
             from .utils.formatting import ResponseFormatter
 
             formatter = ResponseFormatter(self.settings)
             formatted_messages = formatter.format_claude_response(response_text)
 
-            for i, formatted in enumerate(formatted_messages):
+            first_response = True
+            for formatted in formatted_messages:
                 if not formatted.text or not formatted.text.strip():
                     continue
-                await msg.reply_text(
-                    formatted.text,
-                    parse_mode=formatted.parse_mode,
-                    reply_to_message_id=msg.message_id if i == 0 else None,
-                )
+                if first_response:
+                    await progress_msg.edit_text(
+                        formatted.text,
+                        parse_mode=formatted.parse_mode,
+                    )
+                    first_response = False
+                else:
+                    await msg.reply_text(
+                        formatted.text,
+                        parse_mode=formatted.parse_mode,
+                    )
 
-            # Audit log
             duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
             audit_logger = context.bot_data.get("audit_logger")
             if audit_logger:
                 await audit_logger.log_command(
                     user_id=user_id,
                     command="btw",
-                    args=[question[:100]],
+                    args=["runtime_snapshot" if runtime_snapshot else "history_session"],
                     success=True,
                 )
 
@@ -1226,16 +1339,19 @@ class MessageOrchestrator:
                 "/btw completed",
                 user_id=user_id,
                 duration_ms=duration_ms,
-                answer_length=len(answer),
+                answer_length=len(answer_text),
+                used_runtime_snapshot=bool(runtime_snapshot),
+                fork_session_id=fork_session_id,
             )
 
         except Exception as exc:
             duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
-            logger.error("/btw failed", user_id=user_id, error=str(exc))
+            logger.error(
+                "/btw failed", user_id=user_id, duration_ms=duration_ms, error=str(exc)
+            )
 
-            await msg.reply_text(
-                "\U0001f4a1 btw: 查询出错，请稍后重试。",
-                reply_to_message_id=msg.message_id,
+            await progress_msg.edit_text(
+                "btw: query failed, please try again later.",
             )
 
             audit_logger = context.bot_data.get("audit_logger")
@@ -1243,7 +1359,7 @@ class MessageOrchestrator:
                 await audit_logger.log_command(
                     user_id=user_id,
                     command="btw",
-                    args=[question[:100]],
+                    args=["runtime_snapshot" if runtime_snapshot else "history_session"],
                     success=False,
                 )
 
@@ -1349,6 +1465,7 @@ class MessageOrchestrator:
         approved_directory: Optional[Path] = None,
         draft_streamer: Optional[DraftStreamer] = None,
         interrupt_event: Optional[asyncio.Event] = None,
+        active_request: Optional[ActiveRequest] = None,
     ) -> Optional[Callable[[StreamUpdate], Any]]:
         """Create a stream callback for verbose progress updates.
 
@@ -1366,7 +1483,13 @@ class MessageOrchestrator:
         """
         need_mcp_intercept = mcp_images is not None and approved_directory is not None
 
-        if verbose_level == 0 and not need_mcp_intercept and draft_streamer is None:
+        need_runtime_snapshot = active_request is not None
+        if (
+            verbose_level == 0
+            and not need_mcp_intercept
+            and draft_streamer is None
+            and not need_runtime_snapshot
+        ):
             return None
 
         last_edit_time = [0.0]  # mutable container for closure
@@ -1375,6 +1498,9 @@ class MessageOrchestrator:
             # Stop all streaming activity after interrupt
             if interrupt_event is not None and interrupt_event.is_set():
                 return
+
+            if active_request is not None:
+                await active_request.apply_stream_update(update_obj)
 
             # Intercept send_image_to_user MCP tool calls.
             # The SDK namespaces MCP tools as "mcp__<server>__<tool>",
@@ -1614,6 +1740,12 @@ class MessageOrchestrator:
 
         verbose_level = self._get_verbose_level(context)
 
+        current_dir = context.user_data.get(
+            "current_directory", self.settings.approved_directory
+        )
+        session_id = context.user_data.get("claude_session_id")
+        start_time = time.time()
+
         # Create Stop button and interrupt event
         interrupt_event = asyncio.Event()
         stop_kb = InlineKeyboardMarkup(
@@ -1626,6 +1758,10 @@ class MessageOrchestrator:
         # Register active request for stop callback
         active_request = ActiveRequest(
             user_id=user_id,
+            session_id=session_id,
+            working_directory=Path(current_dir),
+            original_prompt=message_text,
+            started_at=start_time,
             interrupt_event=interrupt_event,
             progress_msg=progress_msg,
         )
@@ -1640,18 +1776,12 @@ class MessageOrchestrator:
             )
             return
 
-        current_dir = context.user_data.get(
-            "current_directory", self.settings.approved_directory
-        )
-        session_id = context.user_data.get("claude_session_id")
-
         # Check if /new was used — skip auto-resume for this first message.
         # Flag is only cleared after a successful run so retries keep the intent.
         force_new = bool(context.user_data.get("force_new_session"))
 
         # --- Verbose progress tracking via stream callback ---
         tool_log: List[Dict[str, Any]] = []
-        start_time = time.time()
         mcp_images: List[ImageAttachment] = []
 
         # Stream drafts (private chats only)
@@ -1675,6 +1805,7 @@ class MessageOrchestrator:
             approved_directory=self.settings.approved_directory,
             draft_streamer=draft_streamer,
             interrupt_event=interrupt_event,
+            active_request=active_request,
         )
 
         # Independent typing heartbeat — stays alive even with no stream events

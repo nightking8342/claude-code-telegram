@@ -271,6 +271,25 @@ def test_log_level_validation():
         assert settings.log_level == "DEBUG"
 
 
+def test_claude_btw_timeout_setting(tmp_path, monkeypatch):
+    """BTW timeout should be configurable via CLAUDE_BTW_TIMEOUT_SECONDS."""
+    monkeypatch.delenv("CLAUDE_BTW_TIMEOUT_SECONDS", raising=False)
+    settings = Settings(
+        telegram_bot_token="test_token",
+        telegram_bot_username="test_bot",
+        approved_directory=str(tmp_path),
+    )
+    assert settings.claude_btw_timeout_seconds == 60
+
+    monkeypatch.setenv("CLAUDE_BTW_TIMEOUT_SECONDS", "75")
+    settings = Settings(
+        telegram_bot_token="test_token",
+        telegram_bot_username="test_bot",
+        approved_directory=str(tmp_path),
+    )
+    assert settings.claude_btw_timeout_seconds == 75
+
+
 def test_project_threads_validation_requires_chat_id_in_group_mode(tmp_path):
     """Group thread mode requires project_threads_chat_id."""
     project_dir = tmp_path / "projects"
@@ -598,33 +617,66 @@ def test_feature_flags():
     Path("/tmp/test_mcp.json").unlink(missing_ok=True)
 
 
-def test_environment_loading():
-    """Test environment-specific configuration loading."""
-    # Test development environment
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        os.environ["TELEGRAM_BOT_TOKEN"] = "test_token"
-        os.environ["TELEGRAM_BOT_USERNAME"] = "test_bot"
-        os.environ["APPROVED_DIRECTORY"] = tmp_dir
+def test_load_config_ignores_deprecated_env_argument(tmp_path, monkeypatch):
+    """The legacy env argument should not apply runtime overrides."""
+    for key in [
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_BOT_USERNAME",
+        "APPROVED_DIRECTORY",
+        "DEBUG",
+        "DEVELOPMENT_MODE",
+        "LOG_LEVEL",
+        "CLAUDE_TIMEOUT_SECONDS",
+    ]:
+        monkeypatch.delenv(key, raising=False)
 
-        try:
-            config = load_config(env="development")
-            assert config.debug is True
-            assert config.development_mode is True
-            assert config.log_level == "DEBUG"
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test_token")
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "test_bot")
+    monkeypatch.setenv("APPROVED_DIRECTORY", str(tmp_path))
 
-            config = load_config(env="production")
-            assert config.debug is False
-            assert config.development_mode is False
-            assert config.log_level == "INFO"
+    config = load_config(env="development", config_file=tmp_path / "missing.env")
 
-        finally:
-            # Clean up environment
-            for key in [
-                "TELEGRAM_BOT_TOKEN",
-                "TELEGRAM_BOT_USERNAME",
-                "APPROVED_DIRECTORY",
-            ]:
-                os.environ.pop(key, None)
+    assert config.debug is False
+    assert config.development_mode is False
+    assert config.log_level == "INFO"
+    assert config.claude_timeout_seconds == 300
+
+
+def test_load_config_ignores_environment_key_in_env_file(tmp_path, monkeypatch):
+    """ENVIRONMENT in .env should not select hardcoded runtime defaults."""
+    for key in [
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_BOT_USERNAME",
+        "APPROVED_DIRECTORY",
+        "ENVIRONMENT",
+        "CLAUDE_TIMEOUT_SECONDS",
+        "DEBUG",
+        "DEVELOPMENT_MODE",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "TELEGRAM_BOT_TOKEN=test_token",
+                "TELEGRAM_BOT_USERNAME=test_bot",
+                f"APPROVED_DIRECTORY={tmp_path.as_posix()}",
+                "ENVIRONMENT=development",
+                "CLAUDE_TIMEOUT_SECONDS=-1",
+                "DEBUG=false",
+                "DEVELOPMENT_MODE=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_file=env_file)
+
+    assert config.claude_timeout_seconds == -1
+    assert config.debug is False
+    assert config.development_mode is False
+    assert config.log_level == "INFO"
 
 
 def test_load_config_does_not_log_api_keys(tmp_path):

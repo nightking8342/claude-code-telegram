@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 import structlog
 
 from ..config.settings import Settings
+from .btw import BtwContextSnapshot, BtwResponse
 from .sdk_integration import ClaudeResponse, ClaudeSDKManager, StreamUpdate
 from .session import SessionManager
 
@@ -168,8 +169,9 @@ class ClaudeIntegration:
         question: str,
         working_directory: Path,
         user_id: int,
-        session_id: str,
-    ) -> str:
+        session_id: Optional[str] = None,
+        runtime_snapshot: Optional[BtwContextSnapshot] = None,
+    ) -> BtwResponse:
         """Run a /btw side question. Returns the answer text."""
         logger.info(
             "Running /btw",
@@ -178,8 +180,10 @@ class ClaudeIntegration:
             question_length=len(question),
         )
 
-        # If no session_id provided, look up the most recent session
-        if not session_id and self.session_manager:
+        # If this is an active runtime snapshot but the SDK has not emitted a
+        # session id yet, keep /btw snapshot-only instead of resuming stale
+        # history from the previous Telegram request.
+        if not session_id and runtime_snapshot is None and self.session_manager:
             resumable = await self._find_resumable_session(user_id, working_directory)
             if resumable:
                 session_id = resumable.session_id
@@ -188,13 +192,14 @@ class ClaudeIntegration:
                     session_id=session_id,
                 )
 
-        if not session_id:
-            return ""
+        if not session_id and runtime_snapshot is None:
+            return BtwResponse(content="")
 
         return await self.sdk_manager.execute_btw(
             question=question,
             working_directory=working_directory,
             session_id=session_id,
+            runtime_snapshot=runtime_snapshot,
         )
 
     async def _execute(

@@ -7,18 +7,16 @@ This document provides comprehensive information about configuring the Claude Co
 The bot uses a configuration system built with Pydantic Settings v2 that provides:
 
 - **Type Safety**: All configuration values are validated and type-checked
-- **Environment Support**: Automatic environment-specific overrides
 - **Feature Flags**: Dynamic enabling/disabling of functionality
 - **Validation**: Cross-field validation and runtime checks
 
 ## Configuration Sources
 
-Configuration is loaded in this order (later sources override earlier ones):
+Configuration is loaded in this order:
 
 1. **Default values** defined in the Settings class
-2. **Environment variables**
-3. **`.env` file** (if present)
-4. **Environment-specific overrides** (development/testing/production)
+2. **`.env` file** (if present)
+3. **Environment variables**
 
 ## Environment Variables
 
@@ -69,6 +67,9 @@ CLAUDE_MAX_TURNS=10
 
 # Timeout for Claude operations in seconds
 CLAUDE_TIMEOUT_SECONDS=300
+
+# Timeout for /btw side questions in seconds
+CLAUDE_BTW_TIMEOUT_SECONDS=60
 
 # Maximum cost per user in USD (lifetime budget for rate limiter)
 CLAUDE_MAX_COST_PER_USER=10.0
@@ -207,6 +208,15 @@ When `ENABLE_PROJECT_THREADS=true`:
 # Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL=INFO
 
+# File logging. Windows defaults to rotating file logs in ~/.claude-tg-bot/bot.log.
+LOG_TO_FILE=true
+LOG_FILE=~/.claude-tg-bot/bot.log
+LOG_MAX_BYTES=10485760
+LOG_BACKUP_COUNT=5
+
+# Console logging. Defaults to true only when --debug is used or file logging is off.
+LOG_TO_CONSOLE=false
+
 # Enable anonymous telemetry
 ENABLE_TELEMETRY=false
 
@@ -222,9 +232,6 @@ DEBUG=false
 
 # Enable development features
 DEVELOPMENT_MODE=false
-
-# Environment override (development, testing, production)
-ENVIRONMENT=development
 ```
 
 #### Webhook (Telegram Polling vs Webhook)
@@ -239,43 +246,6 @@ WEBHOOK_PORT=8443
 # Webhook path
 WEBHOOK_PATH=/webhook
 ```
-
-## Environment-Specific Configuration
-
-The bot automatically applies different settings based on the environment:
-
-### Development Environment
-
-Activated when `ENVIRONMENT=development` or when `DEBUG=true`:
-
-- `debug = true`
-- `development_mode = true`
-- `log_level = "DEBUG"`
-- `rate_limit_requests = 100` (more lenient)
-- `claude_timeout_seconds = 600` (longer timeout)
-- `enable_telemetry = false`
-
-### Testing Environment
-
-Activated when `ENVIRONMENT=testing`:
-
-- `debug = true`
-- `database_url = "sqlite:///:memory:"` (in-memory database)
-- `approved_directory = "/tmp/test_projects"`
-- `claude_timeout_seconds = 30` (faster timeout)
-- `rate_limit_requests = 1000` (no effective rate limiting)
-
-### Production Environment
-
-Activated when `ENVIRONMENT=production`:
-
-- `debug = false`
-- `log_level = "INFO"`
-- `enable_telemetry = true`
-- `claude_max_cost_per_user = 5.0` (stricter cost limit)
-- `claude_max_cost_per_request = 2.0` (per-request SDK cap)
-- `rate_limit_requests = 5` (stricter rate limiting)
-- `session_timeout_hours = 12` (shorter session timeout)
 
 ## Feature Flags
 

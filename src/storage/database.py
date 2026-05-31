@@ -310,6 +310,26 @@ class DatabaseManager:
                     ON project_threads(project_slug);
                 """,
             ),
+            (
+                5,
+                """
+                -- /btw fork sessions are kept on disk by Claude Code but hidden
+                -- from Telegram's normal session browser/export flows.
+                CREATE TABLE IF NOT EXISTS btw_fork_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    parent_session_id TEXT,
+                    user_id INTEGER NOT NULL,
+                    project_path TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_btw_forks_user_project
+                    ON btw_fork_sessions(user_id, project_path);
+                CREATE INDEX IF NOT EXISTS idx_btw_forks_parent
+                    ON btw_fork_sessions(parent_session_id);
+                """,
+            ),
         ]
 
     async def _init_pool(self):

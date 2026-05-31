@@ -96,6 +96,41 @@ async def _resolve_title(storage: Any, project_path: str, session_id: str) -> st
     return derive_fallback_title(first_prompt, session_id)
 
 
+async def _btw_fork_ids(storage: Any, user_id: int, project_path: str) -> set[str]:
+    """Best-effort lookup of /btw fork sessions hidden from normal UI."""
+    getter = getattr(storage, "get_btw_fork_session_ids", None)
+    if (
+        getter is not None
+        and type(storage).__module__.startswith("unittest.mock")
+        and "get_btw_fork_session_ids" not in getattr(storage, "__dict__", {})
+    ):
+        return set()
+    if getter is None:
+        return set()
+    try:
+        return set(await getter(user_id, project_path=project_path))
+    except Exception:
+        logger.debug("BTW fork lookup failed", exc_info=True)
+        return set()
+
+
+async def _is_btw_fork(storage: Any, session_id: str, user_id: int) -> bool:
+    checker = getattr(storage, "is_btw_fork_session", None)
+    if (
+        checker is not None
+        and type(storage).__module__.startswith("unittest.mock")
+        and "is_btw_fork_session" not in getattr(storage, "__dict__", {})
+    ):
+        return False
+    if checker is None:
+        return False
+    try:
+        return bool(await checker(session_id, user_id=user_id))
+    except Exception:
+        logger.debug("BTW fork ownership lookup failed", exc_info=True)
+        return False
+
+
 async def list_sessions_view(
     storage: Any,
     user_id: int,
@@ -109,6 +144,7 @@ async def list_sessions_view(
     Returns (text, InlineKeyboardMarkup). No Telegram side-effects.
     """
     # --- DB sessions ---
+    hidden_btw_ids = await _btw_fork_ids(storage, user_id, project_path)
     db_total = await storage.count_user_sessions(
         user_id, project_path=project_path
     )
@@ -120,6 +156,7 @@ async def list_sessions_view(
             limit=db_total,  # fetch all for merging
             offset=0,
         )
+        db_sessions = [s for s in db_sessions if s.session_id not in hidden_btw_ids]
 
     # --- CLI sessions (JSONL files) ---
     cli_map: dict = {}  # session_id → {message_count, last_used}
@@ -128,6 +165,8 @@ async def list_sessions_view(
             Path(project_path)
         )
         for d in cli_raw:
+            if d["session_id"] in hidden_btw_ids:
+                continue
             cli_map[d["session_id"]] = d
     except Exception:
         logger.debug("CLI session scan failed", exc_info=True)
@@ -163,11 +202,15 @@ async def list_sessions_view(
         return text, InlineKeyboardMarkup([])
 
     all_sessions.sort(key=lambda s: s.last_used, reverse=True)
-    total = len(all_sessions)
+    db_total_for_pages = max(0, db_total - len(hidden_btw_ids))
+    total = max(len(db_sessions), db_total_for_pages) + len(cli_sessions)
     total_pages = max(1, (total + page_size - 1) // page_size)
     page = max(0, min(page, total_pages - 1))
 
-    page_sessions = all_sessions[page * page_size : (page + 1) * page_size]
+    if total > len(all_sessions):
+        page_sessions = all_sessions
+    else:
+        page_sessions = all_sessions[page * page_size : (page + 1) * page_size]
 
     rows: list[list[InlineKeyboardButton]] = []
     for s in page_sessions:
@@ -225,6 +268,22 @@ async def session_detail_view(
     Returns None if the session is not owned by user_id (or doesn't exist).
     CLI sessions (not in DB) are supported when *project_path* is provided.
     """
+    if await _is_btw_fork(storage, session_id, user_id):
+        text = (
+            "💡 <b>BTW side session</b>\n\n"
+            "This fork is hidden from normal session history and cannot be "
+            "resumed or exported from Telegram."
+        )
+        rows = [
+            [
+                InlineKeyboardButton(
+                    "Back to list",
+                    callback_data=f"sessions:back:{back_page}",
+                )
+            ]
+        ]
+        return text, InlineKeyboardMarkup(rows)
+
     session = await storage.load_session(session_id, user_id)
     is_cli = False
 

@@ -301,7 +301,11 @@ class TestRunBtw:
 
     async def test_run_btw_delegates_to_sdk(self, facade):
         """run_btw should delegate to sdk_manager.execute_btw()."""
-        facade.sdk_manager.execute_btw = AsyncMock(return_value="PostgreSQL 15")
+        from src.claude.btw import BtwResponse
+
+        facade.sdk_manager.execute_btw = AsyncMock(
+            return_value=BtwResponse(content="PostgreSQL 15")
+        )
 
         result = await facade.run_btw(
             question="What database?",
@@ -310,11 +314,12 @@ class TestRunBtw:
             session_id="test-session-id",
         )
 
-        assert result == "PostgreSQL 15"
+        assert result.content == "PostgreSQL 15"
         facade.sdk_manager.execute_btw.assert_called_once_with(
             question="What database?",
             working_directory=Path("/tmp"),
             session_id="test-session-id",
+            runtime_snapshot=None,
         )
 
     async def test_run_btw_looks_up_session_when_none(self, facade, session_manager):
@@ -333,7 +338,11 @@ class TestRunBtw:
         await session_manager.storage.save_session(existing)
         session_manager.active_sessions[existing.session_id] = existing
 
-        facade.sdk_manager.execute_btw = AsyncMock(return_value="answer")
+        from src.claude.btw import BtwResponse
+
+        facade.sdk_manager.execute_btw = AsyncMock(
+            return_value=BtwResponse(content="answer")
+        )
 
         result = await facade.run_btw(
             question="test",
@@ -342,10 +351,52 @@ class TestRunBtw:
             session_id="",
         )
 
-        assert result == "answer"
+        assert result.content == "answer"
         facade.sdk_manager.execute_btw.assert_called_once()
         call_kwargs = facade.sdk_manager.execute_btw.call_args[1]
         assert call_kwargs["session_id"] == "found-session-id"
+
+    async def test_run_btw_with_snapshot_does_not_lookup_stale_session(
+        self, facade, session_manager
+    ):
+        """Snapshot-only /btw should not resume the user's previous session."""
+        from src.claude.btw import BtwContextSnapshot, BtwResponse
+
+        project = Path("/test/project")
+        user_id = 12345
+        existing = ClaudeSession(
+            session_id="old-session-id",
+            user_id=user_id,
+            project_path=project,
+            created_at=datetime.utcnow(),
+            last_used=datetime.utcnow(),
+        )
+        await session_manager.storage.save_session(existing)
+        session_manager.active_sessions[existing.session_id] = existing
+
+        snapshot = BtwContextSnapshot(
+            session_id=None,
+            working_directory=project,
+            original_prompt="run a long task",
+            elapsed_seconds=12,
+            last_status="Starting",
+        )
+        facade.sdk_manager.execute_btw = AsyncMock(
+            return_value=BtwResponse(content="answer")
+        )
+
+        result = await facade.run_btw(
+            question="where are we?",
+            working_directory=project,
+            user_id=user_id,
+            session_id="",
+            runtime_snapshot=snapshot,
+        )
+
+        assert result.content == "answer"
+        call_kwargs = facade.sdk_manager.execute_btw.call_args[1]
+        assert call_kwargs["session_id"] == ""
+        assert call_kwargs["runtime_snapshot"] is snapshot
 
     async def test_run_btw_returns_empty_when_no_session(self, facade):
         """run_btw should return empty string when no session available."""
@@ -358,5 +409,5 @@ class TestRunBtw:
             session_id="",
         )
 
-        assert result == ""
+        assert result.content == ""
         facade.sdk_manager.execute_btw.assert_not_called()

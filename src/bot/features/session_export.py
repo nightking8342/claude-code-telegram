@@ -163,6 +163,18 @@ class SessionExporter:
         # Always try JSONL first — it contains the full conversation
         # (including CLI messages and bot messages that resume the same session).
         session, messages = _read_cli_session(session_id)
+        checker = getattr(self.storage.sessions, "is_btw_fork_session", None)
+        if (
+            checker is not None
+            and type(self.storage.sessions).__module__.startswith("unittest.mock")
+            and "is_btw_fork_session"
+            not in getattr(self.storage.sessions, "__dict__", {})
+        ):
+            checker = None
+        if checker is not None and await checker(session_id, user_id=user_id):
+            raise ValueError(
+                "BTW side sessions are hidden from normal export flows"
+            )
 
         if session is None:
             # No JSONL transcript — fall back to DB

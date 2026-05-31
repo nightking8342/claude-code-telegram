@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.bot.orchestrator import MessageOrchestrator, _redact_secrets
+from src.bot.orchestrator import ActiveRequest, MessageOrchestrator, _redact_secrets
 from src.config import create_test_config
 
 
@@ -100,8 +100,20 @@ def test_agentic_registers_commands(agentic_settings, deps):
     ]
     commands = [h[0][0].commands for h in cmd_handlers]
 
-    expected = {"start", "new", "status", "verbose", "plan", "repo",
-                "provider", "model", "sessions", "restart", "skill", "btw"}
+    expected = {
+        "start",
+        "new",
+        "status",
+        "verbose",
+        "plan",
+        "repo",
+        "provider",
+        "model",
+        "sessions",
+        "restart",
+        "skill",
+        "btw",
+    }
     registered = set()
     for cmd_set in commands:
         registered |= cmd_set
@@ -175,30 +187,46 @@ async def test_classic_bot_commands(classic_settings, deps):
         assert cmd in cmd_names
 
 
-async def test_restart_command_sends_sigterm(deps):
+async def test_restart_command_sends_sigterm(deps, tmp_path):
     """restart_command sends SIGTERM to the current process."""
     from unittest.mock import patch
 
+    from src.bot.handlers import command
     from src.bot.handlers.command import restart_command
 
     update = MagicMock()
     update.effective_user.id = 123
     update.message.reply_text = AsyncMock()
+    update.effective_chat.id = 123
 
     context = MagicMock()
     context.bot_data = {"audit_logger": None}
+    state_dir = tmp_path / ".claude-tg-bot"
+    state_dir.mkdir()
+    (state_dir / "start-bot.vbs").write_text("' launcher", encoding="utf-8")
 
-    with patch("src.bot.handlers.command.os.kill") as mock_kill:
+    with (
+        patch.object(command.sys, "platform", "win32"),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("subprocess.Popen") as mock_popen,
+        patch("src.bot.handlers.command.signal.raise_signal") as mock_raise_signal,
+    ):
         await restart_command(update, context)
 
-    import os
     import signal
 
-    mock_kill.assert_called_once_with(os.getpid(), signal.SIGTERM)
+    mock_popen.assert_called_once()
+    popen_args = mock_popen.call_args.args[0]
+    assert popen_args[0] == "cmd.exe"
+    assert "restart-helper.cmd" in " ".join(popen_args)
+    helper_text = (state_dir / "restart-helper.cmd").read_text(encoding="utf-8")
+    assert "Wait-Process" in helper_text
+    assert "restart-helper.log" in " ".join(popen_args)
+    mock_raise_signal.assert_called_once_with(signal.SIGTERM)
     # Verify confirmation message was sent
     update.message.reply_text.assert_called_once()
     msg = update.message.reply_text.call_args[0][0]
-    assert "Restarting" in msg
+    assert "\u91cd\u542f" in msg
 
 
 async def test_agentic_start_no_keyboard(agentic_settings, deps):
@@ -1000,7 +1028,9 @@ async def test_handle_btw_sends_reply(agentic_settings, deps, tmp_dir):
     mock_msg = MagicMock()
     mock_msg.text = "/btw What database does this use?"
     mock_msg.message_id = 100
-    mock_msg.reply_text = AsyncMock()
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
+    mock_msg.reply_text = AsyncMock(return_value=progress_msg)
 
     mock_update = MagicMock()
     mock_update.effective_message = mock_msg
@@ -1022,9 +1052,18 @@ async def test_handle_btw_sends_reply(agentic_settings, deps, tmp_dir):
     await orchestrator._handle_btw(mock_update, mock_context)
 
     mock_msg.reply_text.assert_called_once()
-    call_args = mock_msg.reply_text.call_args
+    progress_call_args = mock_msg.reply_text.call_args
+    progress_text = (
+        progress_call_args[0][0]
+        if progress_call_args[0]
+        else progress_call_args[1].get("text", "")
+    )
+    assert "\u56de\u7b54\u4e2d" in progress_text
+
+    progress_msg.edit_text.assert_called_once()
+    call_args = progress_msg.edit_text.call_args
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-    assert "\U0001f4a1 btw:" in text
+    assert "btw:" in text
     assert "PostgreSQL 15" in text
 
 
@@ -1048,7 +1087,7 @@ async def test_handle_btw_no_question_shows_usage(agentic_settings, deps):
     mock_msg.reply_text.assert_called_once()
     call_args = mock_msg.reply_text.call_args
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-    assert "用法" in text
+    assert "Usage: /btw" in text
 
 
 @pytest.mark.asyncio
@@ -1059,7 +1098,9 @@ async def test_handle_btw_no_session(agentic_settings, deps, tmp_dir):
     mock_msg = MagicMock()
     mock_msg.text = "/btw What is this?"
     mock_msg.message_id = 50
-    mock_msg.reply_text = AsyncMock()
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
+    mock_msg.reply_text = AsyncMock(return_value=progress_msg)
 
     mock_update = MagicMock()
     mock_update.effective_message = mock_msg
@@ -1077,6 +1118,51 @@ async def test_handle_btw_no_session(agentic_settings, deps, tmp_dir):
     await orchestrator._handle_btw(mock_update, mock_context)
 
     mock_msg.reply_text.assert_called_once()
-    call_args = mock_msg.reply_text.call_args
+    progress_msg.edit_text.assert_called_once()
+    call_args = progress_msg.edit_text.call_args
     text = call_args[0][0] if call_args[0] else call_args[1].get("text", "")
-    assert "会话" in text
+    assert "no active or resumable Claude session" in text
+
+
+@pytest.mark.asyncio
+async def test_handle_btw_active_snapshot_without_session_does_not_resume_old_session(
+    agentic_settings, deps, tmp_dir
+):
+    """An active request without a session id should use snapshot-only /btw."""
+    orchestrator = MessageOrchestrator(agentic_settings, deps)
+    active = ActiveRequest(
+        user_id=12345,
+        session_id=None,
+        working_directory=tmp_dir,
+        original_prompt="run a long task",
+    )
+    orchestrator._active_requests[12345] = active
+
+    mock_msg = MagicMock()
+    mock_msg.text = "/btw where are we?"
+    mock_msg.message_id = 51
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
+    mock_msg.reply_text = AsyncMock(return_value=progress_msg)
+
+    mock_update = MagicMock()
+    mock_update.effective_message = mock_msg
+    mock_update.effective_user.id = 12345
+
+    mock_context = MagicMock()
+    mock_context.bot_data = {
+        "claude_integration": deps["claude_integration"],
+        "storage": deps["storage"],
+    }
+    mock_context.user_data = {
+        "claude_session_id": "old-session-id",
+        "current_directory": str(tmp_dir),
+    }
+
+    deps["claude_integration"].run_btw = AsyncMock(return_value="still running")
+
+    await orchestrator._handle_btw(mock_update, mock_context)
+
+    call_kwargs = deps["claude_integration"].run_btw.call_args.kwargs
+    assert call_kwargs["session_id"] is None
+    assert call_kwargs["runtime_snapshot"] is not None

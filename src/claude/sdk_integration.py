@@ -2,6 +2,9 @@
 
 import asyncio
 import os
+import shutil
+import tempfile
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional
@@ -28,10 +31,16 @@ from claude_agent_sdk import (
 )
 from claude_agent_sdk._errors import MessageParseError
 from claude_agent_sdk._internal.message_parser import parse_message
+from claude_agent_sdk._internal.session_resume import _copy_auth_files
+from claude_agent_sdk._internal.sessions import (
+    _get_projects_dir,
+    project_key_for_directory,
+)
 from claude_agent_sdk.types import StreamEvent
 
 from ..config.settings import Settings
 from ..security.validators import SecurityValidator
+from .btw import BtwContextSnapshot, BtwResponse
 from .exceptions import (
     ClaudeMCPError,
     ClaudeParsingError,
@@ -177,6 +186,68 @@ class StreamUpdate:
                 return max(0, min(100, percentage))
 
         return None
+
+
+@dataclass
+class _EphemeralBtwConfig:
+    """Temporary Claude config used so /btw transcripts never hit real disk."""
+
+    path: Path
+    parent_session_available: bool
+
+
+def _prepare_ephemeral_btw_config(
+    working_directory: Path,
+    parent_session_id: Optional[str],
+) -> _EphemeralBtwConfig:
+    """Create a temporary CLAUDE_CONFIG_DIR for a non-persistent /btw run."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="claude-btw-"))
+    try:
+        _copy_auth_files(tmp_dir, {})
+
+        parent_available = False
+        if parent_session_id:
+            project_key = project_key_for_directory(working_directory)
+            src_jsonl = _get_projects_dir() / project_key / f"{parent_session_id}.jsonl"
+            if src_jsonl.is_file():
+                dst_jsonl = (
+                    tmp_dir / "projects" / project_key / f"{parent_session_id}.jsonl"
+                )
+                dst_jsonl.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src_jsonl, dst_jsonl)
+                with suppress(OSError):
+                    dst_jsonl.chmod(0o600)
+                parent_available = True
+            else:
+                logger.info(
+                    "/btw parent transcript not found; using snapshot-only mode",
+                    session_id=parent_session_id,
+                    working_directory=str(working_directory),
+                    path=str(src_jsonl),
+                )
+
+        return _EphemeralBtwConfig(
+            path=tmp_dir,
+            parent_session_available=parent_available,
+        )
+    except BaseException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+async def _cleanup_ephemeral_btw_config(path: Optional[Path]) -> None:
+    """Best-effort cleanup for the temporary /btw Claude config directory."""
+    if path is None:
+        return
+    for _ in range(4):
+        try:
+            await asyncio.to_thread(shutil.rmtree, path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            await asyncio.sleep(0.1)
+    await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
 
 
 def _make_can_use_tool_callback(
@@ -337,6 +408,15 @@ class ClaudeSDKManager:
             else:
                 effective_model = self.config.claude_model or None
 
+            # Pin the active provider/model at the highest-priority ("flag")
+            # settings layer so it overrides ~/.claude/settings.json's env block;
+            # setting_sources below still inherits user skills/memory/plugins.
+            settings_overlay: Optional[str] = None
+            if self.provider_manager:
+                overlay_path = self.provider_manager.settings_overlay_path()
+                if overlay_path.exists():
+                    settings_overlay = str(overlay_path)
+
             # Build Claude Agent options
             options = ClaudeAgentOptions(
                 max_turns=self.config.claude_max_turns,
@@ -346,13 +426,16 @@ class ClaudeSDKManager:
                 allowed_tools=sdk_allowed_tools,
                 disallowed_tools=sdk_disallowed_tools,
                 cli_path=self.config.claude_cli_path or None,
-                include_partial_messages=stream_callback is not None,
+                # TEMP VERIFY (stop-button-during-output bug): force OFF to isolate
+                # the token-stream variable. Original: stream_callback is not None
+                include_partial_messages=False,
                 sandbox={
                     "enabled": self.config.sandbox_enabled,
                     "autoAllowBashIfSandboxed": True,
                     "excludedCommands": self.config.sandbox_excluded_commands or [],
                 },
                 system_prompt=base_prompt,
+                settings=settings_overlay,
                 setting_sources=["user", "project"],
                 stderr=_stderr_callback,
                 permission_mode=permission_mode or None,
@@ -729,27 +812,118 @@ class ClaudeSDKManager:
             if saved_env:
                 self.provider_manager.restore_environ(saved_env)
 
+    def _format_btw_snapshot(self, snapshot: Optional[BtwContextSnapshot]) -> str:
+        """Render an active request snapshot for the /btw prompt."""
+        if snapshot is None:
+            return "No active Telegram runtime snapshot is available."
+
+        tool_lines = []
+        for item in snapshot.recent_tools[-10:]:
+            kind = item.get("kind", "activity")
+            name = item.get("name")
+            detail = item.get("detail")
+            if name and detail:
+                tool_lines.append(f"- {kind}: {name}: {detail}")
+            elif name:
+                tool_lines.append(f"- {kind}: {name}")
+            elif detail:
+                tool_lines.append(f"- {kind}: {detail}")
+
+        parts = [
+            f"Working directory: {snapshot.working_directory}",
+            f"Elapsed seconds: {int(snapshot.elapsed_seconds)}",
+            f"Last status: {snapshot.last_status}",
+        ]
+        if snapshot.current_tool:
+            parts.append(f"Current tool: {snapshot.current_tool}")
+        if snapshot.original_prompt:
+            parts.append(f"Original main task:\n{snapshot.original_prompt[:2000]}")
+        if tool_lines:
+            parts.append("Recent activity:\n" + "\n".join(tool_lines))
+        if snapshot.last_assistant_text:
+            parts.append(
+                "Last assistant message excerpt:\n"
+                + snapshot.last_assistant_text[:1200]
+            )
+        if snapshot.recent_stream_text:
+            parts.append(
+                "Recent streamed assistant text:\n"
+                + snapshot.recent_stream_text[-1200:]
+            )
+        return "\n\n".join(parts)
+
+    def _build_btw_prompt(
+        self, question: str, snapshot: Optional[BtwContextSnapshot]
+    ) -> str:
+        """Build a CodeSource-style no-tool side question prompt."""
+        runtime_context = self._format_btw_snapshot(snapshot)
+        return (
+            "<system-reminder>This is a side question from the user. "
+            "Answer directly in a single response.\n\n"
+            "IMPORTANT CONTEXT:\n"
+            "- You are a separate lightweight agent spawned for this one question.\n"
+            "- The main agent is not interrupted and may still be running.\n"
+            "- You may use the resumed conversation context and the Telegram "
+            "runtime snapshot below.\n\n"
+            "CRITICAL CONSTRAINTS:\n"
+            "- You have no tools available. Do not read files, run commands, "
+            "search, or take actions.\n"
+            "- This is a one-off response. There will be no follow-up turns.\n"
+            "- Do not say 'let me check', 'I will run', or promise any action.\n"
+            "- If the snapshot is insufficient, say what is known and what is "
+            "unknown.</system-reminder>\n\n"
+            "Telegram runtime snapshot:\n"
+            f"{runtime_context}\n\n"
+            "User side question:\n"
+            f"{question}"
+        )
+
     async def execute_btw(
         self,
         question: str,
         working_directory: Path,
-        session_id: str,
-    ) -> str:
-        """Execute a /btw side question — no tools, single turn, resume context."""
+        session_id: Optional[str] = None,
+        runtime_snapshot: Optional[BtwContextSnapshot] = None,
+    ) -> BtwResponse:
+        """Execute a /btw side question with no tools and at most one turn."""
         start_time = asyncio.get_event_loop().time()
-        btw_timeout = 30  # seconds
+        # Forking a large Claude Code session can spend tens of seconds loading
+        # cached context before the one-turn answer starts streaming. Keep the
+        # side question bounded, but avoid failing right on the common 25-30s edge.
+        btw_timeout = self.config.claude_btw_timeout_seconds
+        parent_session_id = session_id or (
+            runtime_snapshot.session_id if runtime_snapshot else None
+        )
 
         logger.info(
             "Starting /btw side question",
             working_directory=str(working_directory),
-            session_id=session_id,
+            session_id=parent_session_id,
             question_length=len(question),
+            has_runtime_snapshot=runtime_snapshot is not None,
         )
 
+        ephemeral_config: Optional[_EphemeralBtwConfig] = None
         try:
             saved_env: Dict[str, Optional[str]] = {}
             if self.provider_manager:
                 saved_env = self.provider_manager.apply_to_environ()
+
+            ephemeral_config = _prepare_ephemeral_btw_config(
+                working_directory=working_directory,
+                parent_session_id=parent_session_id,
+            )
+            effective_parent_session_id = (
+                parent_session_id if ephemeral_config.parent_session_available else None
+            )
+            if parent_session_id and not effective_parent_session_id:
+                logger.info(
+                    "/btw parent session unavailable in local transcript store",
+                    session_id=parent_session_id,
+                    used_runtime_snapshot=runtime_snapshot is not None,
+                )
+                if runtime_snapshot is None:
+                    return BtwResponse(content="")
 
             stderr_lines: List[str] = []
 
@@ -774,6 +948,7 @@ class ClaudeSDKManager:
                 model=effective_model,
                 max_budget_usd=self.config.claude_max_cost_per_request,
                 cwd=str(working_directory),
+                tools=[],
                 allowed_tools=[],
                 disallowed_tools=[],
                 cli_path=self.config.claude_cli_path or None,
@@ -786,16 +961,20 @@ class ClaudeSDKManager:
                 system_prompt=base_prompt,
                 setting_sources=["project"],
                 stderr=_stderr_callback,
+                env={"CLAUDE_CONFIG_DIR": str(ephemeral_config.path)},
             )
-            options.resume = session_id
+            if effective_parent_session_id:
+                options.resume = effective_parent_session_id
+                options.fork_session = True
 
+            prompt = self._build_btw_prompt(question, runtime_snapshot)
             messages: List[Message] = []
 
             async def _run_client() -> None:
                 client = ClaudeSDKClient(options)
                 try:
                     await client.connect()
-                    await client.query(question)
+                    await client.query(prompt)
 
                     async for raw_data in client._query.receive_messages():
                         try:
@@ -821,10 +1000,12 @@ class ClaudeSDKManager:
             except asyncio.CancelledError:
                 raise
 
-            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
-
             content = ""
+            ephemeral_session_id = None
             for message in messages:
+                msg_session_id = getattr(message, "session_id", None)
+                if msg_session_id and msg_session_id != effective_parent_session_id:
+                    ephemeral_session_id = msg_session_id
                 if isinstance(message, ResultMessage):
                     result_content = getattr(message, "result", None)
                     if result_content is not None:
@@ -841,42 +1022,41 @@ class ClaudeSDKManager:
                                 text_parts.append(block.text)
                 content = "\n".join(text_parts).strip()
 
+            duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
             logger.info(
-                "/btw completed",
+                "/btw side question completed",
                 duration_ms=duration_ms,
-                content_length=len(content),
+                response_length=len(content),
+                ephemeral_session_id=ephemeral_session_id,
+                persistent_session=False,
             )
 
-            return content
+            return BtwResponse(
+                content=content,
+                fork_session_id=None,
+                used_runtime_snapshot=runtime_snapshot is not None,
+            )
 
-        except (ClaudeTimeoutError, ClaudeProcessError, ClaudeMCPError):
+        except (ClaudeTimeoutError, asyncio.CancelledError):
             raise
-        except CLIJSONDecodeError as exc:
-            logger.error("Claude SDK JSON decode error in /btw", error=str(exc))
-            raise ClaudeParsingError(
-                f"Failed to decode Claude response: {exc}"
-            ) from exc
-        except ClaudeSDKError as exc:
-            logger.error("Claude SDK error in /btw", error=str(exc))
-            raise ClaudeProcessError(f"Claude SDK error: {exc}") from exc
-        except CLINotFoundError as exc:
-            raise ClaudeProcessError(f"Claude CLI not found: {exc}") from exc
-        except ProcessError as exc:
-            raise ClaudeProcessError(f"Claude CLI process error: {exc}") from exc
-        except CLIConnectionError as exc:
-            raise ClaudeProcessError(f"Claude CLI connection error: {exc}") from exc
-        except Exception as exc:
-            logger.error("/btw unexpected error", error=str(exc))
-            raise ClaudeProcessError(f"/btw unexpected error: {exc}") from exc
+        except CLIConnectionError as e:
+            raise ClaudeProcessError(f"Claude Code connection failed: {e}") from e
+        except ClaudeSDKError as e:
+            raise ClaudeProcessError(f"Claude SDK error in /btw: {e}") from e
         finally:
-            if saved_env:
+            if self.provider_manager:
                 self.provider_manager.restore_environ(saved_env)
+            await _cleanup_ephemeral_btw_config(
+                ephemeral_config.path if ephemeral_config else None
+            )
 
     async def _handle_stream_message(
         self, message: Message, stream_callback: Callable[[StreamUpdate], None]
     ) -> None:
         """Handle streaming message from claude-agent-sdk."""
         try:
+            session_id = getattr(message, "session_id", None)
+            metadata = {"session_id": session_id} if session_id else None
             if isinstance(message, AssistantMessage):
                 # Extract content from assistant message
                 content = getattr(message, "content", [])
@@ -903,6 +1083,7 @@ class ClaudeSDKManager:
                         type="assistant",
                         content=("\n".join(text_parts) if text_parts else None),
                         tool_calls=tool_calls if tool_calls else None,
+                        metadata=metadata,
                     )
                     await stream_callback(update)
                 elif content:
@@ -910,6 +1091,7 @@ class ClaudeSDKManager:
                     update = StreamUpdate(
                         type="assistant",
                         content=str(content),
+                        metadata=metadata,
                     )
                     await stream_callback(update)
 
@@ -923,6 +1105,7 @@ class ClaudeSDKManager:
                             update = StreamUpdate(
                                 type="stream_delta",
                                 content=text,
+                                metadata=metadata,
                             )
                             await stream_callback(update)
 
@@ -932,6 +1115,7 @@ class ClaudeSDKManager:
                     update = StreamUpdate(
                         type="user",
                         content=content,
+                        metadata=metadata,
                     )
                     await stream_callback(update)
 

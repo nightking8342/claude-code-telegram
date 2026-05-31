@@ -5,9 +5,11 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import sys
 from datetime import UTC, datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -41,18 +43,83 @@ from src.security.rate_limiter import RateLimiter
 from src.security.validators import SecurityValidator
 from src.storage.facade import Storage
 from src.storage.session_storage import SQLiteSessionStorage
+from src.utils.single_instance import SingleInstanceGuard
+
+
+_TELEGRAM_BOT_URL_RE = re.compile(
+    r"(https://api\.telegram\.org/bot)\d{8,10}:[A-Za-z0-9_-]+"
+)
+_TELEGRAM_TOKEN_RE = re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{20,}\b")
+
+
+def _sanitize_log_text(value: str) -> str:
+    value = _TELEGRAM_BOT_URL_RE.sub(r"\1<telegram-token>", value)
+    return _TELEGRAM_TOKEN_RE.sub("<telegram-token>", value)
+
+
+class SanitizingFormatter(logging.Formatter):
+    """Formatter that removes secrets from final log lines."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _sanitize_log_text(super().format(record))
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def setup_logging(debug: bool = False) -> None:
     """Configure structured logging."""
-    level = logging.DEBUG if debug else logging.INFO
+    raw_level = os.getenv("LOG_LEVEL", "DEBUG" if debug else "INFO").upper()
+    level = getattr(logging, raw_level, logging.INFO)
+
+    formatter = SanitizingFormatter("%(message)s")
+    handlers: list[logging.Handler] = []
+
+    log_to_file = _env_bool("LOG_TO_FILE", sys.platform == "win32")
+    if log_to_file:
+        default_log_file = Path.home() / ".claude-tg-bot" / "bot.log"
+        log_file = Path(os.getenv("LOG_FILE", str(default_log_file))).expanduser()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=_env_int("LOG_MAX_BYTES", 10 * 1024 * 1024),
+            backupCount=_env_int("LOG_BACKUP_COUNT", 5),
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+
+    log_to_console = _env_bool("LOG_TO_CONSOLE", debug or not handlers)
+    if log_to_console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        handlers.append(console_handler)
 
     # Configure standard logging
     logging.basicConfig(
         level=level,
-        format="%(message)s",
-        stream=sys.stdout,
+        handlers=handlers,
+        force=True,
     )
+
+    # Keep third-party HTTP noise out of the main bot log. It is especially
+    # noisy during long polling and may include sensitive request URLs.
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     # Configure structlog
     structlog.configure(
@@ -241,11 +308,9 @@ async def run_application(app: Dict[str, Any]) -> None:
                 )
                 if str(old_pid) in check.stdout:
                     logger.warning(
-                        "Killing duplicate bot process",
+                        "PID file belongs to another running bot process",
                         old_pid=old_pid,
                     )
-                    _sp.run(["taskkill", "/PID", str(old_pid), "/F"],
-                            capture_output=True)
     except Exception as exc:
         logger.debug("PID file check failed", error=str(exc))
 
@@ -489,9 +554,24 @@ async def main() -> None:
             debug=config.debug,
         )
 
-        # Initialize bot and Claude integration
-        app = await create_application(config)
-        await run_application(app)
+        state_dir = Path.home() / ".claude-tg-bot"
+        instance_guard = SingleInstanceGuard(
+            lock_path=state_dir / "bot.lock",
+            pid_path=state_dir / "bot.pid",
+        )
+        if not instance_guard.acquire(wait_seconds=30.0):
+            logger.warning(
+                "Another Claude Telegram bot instance is already running",
+                existing_pid=instance_guard.read_existing_pid(),
+            )
+            return
+
+        try:
+            logger.info("Single-instance lock acquired", pid=os.getpid())
+            app = await create_application(config)
+            await run_application(app)
+        finally:
+            instance_guard.release()
 
     except ConfigurationError as e:
         logger.error("Configuration error", error=str(e))

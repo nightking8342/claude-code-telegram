@@ -102,8 +102,10 @@ CLAUDE_MAX_COST_PER_USER=5.0
 ENABLE_TELEMETRY=true  # For security monitoring
 LOG_LEVEL=INFO         # Capture security events
 
-# Environment
-ENVIRONMENT=production  # Enables strict security defaults
+# Production posture
+DEBUG=false
+DEVELOPMENT_MODE=false
+RATE_LIMIT_REQUESTS=5
 ```
 
 ## Security Best Practices

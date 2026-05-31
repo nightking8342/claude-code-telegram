@@ -96,8 +96,7 @@ src/
 ├── config/           # Configuration management (✅ Complete)
 │   ├── __init__.py
 │   ├── settings.py   # Pydantic Settings class
-│   ├── loader.py     # Environment detection and loading
-│   ├── environments.py # Environment-specific overrides
+│   ├── loader.py     # .env and environment variable loading
 │   └── features.py   # Feature flag management
 ├── bot/              # Telegram bot implementation (✅ Complete)
 │   ├── __init__.py
@@ -138,7 +137,6 @@ src/
 tests/
 ├── unit/             # Unit tests (mirror src structure)
 │   ├── test_config.py
-│   ├── test_environments.py
 │   ├── test_exceptions.py
 │   ├── test_bot/     # Bot component tests
 │   ├── test_claude/  # Claude integration tests
@@ -270,12 +268,11 @@ We aim for >80% test coverage. Current coverage:
 
 #### TODO-2: Configuration System
 - **Pydantic Settings v2** with environment variable loading
-- **Environment-specific overrides** (development/testing/production)
 - **Feature flags system** for dynamic functionality control
 - **Cross-field validation** with proper error messages
 - **Type-safe configuration** with full mypy compliance
 - **Computed properties** for derived values
-- **Configuration loader** with environment detection
+- **Configuration loader** for .env and environment variables
 - **Test utilities** for easy test configuration
 
 #### TODO-3: Authentication & Security Framework
@@ -348,7 +345,6 @@ APPROVED_DIRECTORY=/path/to/your/test/projects
 DEBUG=true
 DEVELOPMENT_MODE=true
 LOG_LEVEL=DEBUG
-ENVIRONMENT=development
 
 # Optional for testing specific features
 ENABLE_GIT_INTEGRATION=true

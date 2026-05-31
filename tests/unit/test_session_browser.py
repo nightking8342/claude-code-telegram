@@ -105,6 +105,29 @@ class TestListSessionsView:
         assert kb.inline_keyboard[0][0].callback_data == "sessions:detail:s0"
 
     @pytest.mark.asyncio
+    async def test_filters_recorded_btw_fork_sessions(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=2)
+        storage.get_user_sessions = AsyncMock(
+            return_value=[_fake_session("main"), _fake_session("btw-fork")]
+        )
+        storage.get_btw_fork_session_ids = AsyncMock(return_value={"btw-fork"})
+
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="title",
+        ):
+            _, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=0
+            )
+
+        buttons = [b for row in kb.inline_keyboard for b in row]
+        cbs = [b.callback_data for b in buttons]
+        assert "sessions:detail:main" in cbs
+        assert "sessions:detail:btw-fork" not in cbs
+
+    @pytest.mark.asyncio
     async def test_multi_page_has_next_button(self):
         storage = AsyncMock()
         storage.count_user_sessions = AsyncMock(return_value=25)

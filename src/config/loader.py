@@ -1,4 +1,4 @@
-"""Configuration loading with environment detection."""
+"""Configuration loading from .env files and environment variables."""
 
 import os
 from pathlib import Path
@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 from src.exceptions import ConfigurationError, InvalidConfigError
 
-from .environments import DevelopmentConfig, ProductionConfig, TestingConfig
 from .settings import Settings
 
 logger = structlog.get_logger()
@@ -18,10 +17,10 @@ logger = structlog.get_logger()
 def load_config(
     env: Optional[str] = None, config_file: Optional[Path] = None
 ) -> Settings:
-    """Load configuration based on environment.
+    """Load configuration from environment variables and an optional .env file.
 
     Args:
-        env: Environment name (development, testing, production)
+        env: Deprecated and ignored. Kept for compatibility with older callers.
         config_file: Optional path to configuration file
 
     Returns:
@@ -38,9 +37,11 @@ def load_config(
     else:
         logger.warning("No .env file found", path=str(env_file))
 
-    # Determine environment
-    env = env or os.getenv("ENVIRONMENT", "development")
-    logger.info("Loading configuration", environment=env)
+    if env is not None:
+        logger.warning(
+            "Ignoring deprecated load_config env argument; use explicit settings instead",
+            environment=env,
+        )
 
     try:
         # Debug: Log key environment variables before Settings creation
@@ -56,15 +57,11 @@ def load_config(
         # pydantic-settings will automatically read from environment variables
         settings = Settings()  # type: ignore[call-arg]
 
-        # Apply environment-specific overrides
-        settings = _apply_environment_overrides(settings, env)
-
         # Validate configuration
         _validate_config(settings)
 
         logger.info(
             "Configuration loaded successfully",
-            environment=env,
             debug=settings.debug,
             approved_directory=str(settings.approved_directory),
             features_enabled=_get_enabled_features_summary(settings),
@@ -73,32 +70,8 @@ def load_config(
         return settings
 
     except Exception as e:
-        logger.error("Failed to load configuration", error=str(e), environment=env)
+        logger.error("Failed to load configuration", error=str(e))
         raise ConfigurationError(f"Configuration loading failed: {e}") from e
-
-
-def _apply_environment_overrides(settings: Settings, env: Optional[str]) -> Settings:
-    """Apply environment-specific configuration overrides."""
-    overrides = {}
-
-    if env == "development":
-        overrides = DevelopmentConfig.as_dict()
-    elif env == "testing":
-        overrides = TestingConfig.as_dict()
-    elif env == "production":
-        overrides = ProductionConfig.as_dict()
-    else:
-        logger.warning("Unknown environment, using default settings", environment=env)
-
-    # Apply overrides
-    for key, value in overrides.items():
-        if hasattr(settings, key):
-            setattr(settings, key, value)
-            logger.debug(
-                "Applied environment override", key=key, value=value, environment=env
-            )
-
-    return settings
 
 
 def _validate_config(settings: Settings) -> None:
@@ -186,17 +159,18 @@ def create_test_config(**overrides: Any) -> Settings:
     Returns:
         Settings instance configured for testing
     """
-    # Start with testing defaults
-    test_values = TestingConfig.as_dict()
-
-    # Add required fields for testing
-    test_values.update(
-        {
-            "telegram_bot_token": "test_token_123",
-            "telegram_bot_username": "test_bot",
-            "approved_directory": "/tmp/test_projects",
-        }
-    )
+    test_values = {
+        "telegram_bot_token": "test_token_123",
+        "telegram_bot_username": "test_bot",
+        "approved_directory": "/tmp/test_projects",
+        "debug": True,
+        "development_mode": True,
+        "database_url": "sqlite:///:memory:",
+        "enable_telemetry": False,
+        "claude_timeout_seconds": 30,
+        "rate_limit_requests": 1000,
+        "session_timeout_hours": 1,
+    }
 
     # Apply any overrides
     test_values.update(overrides)

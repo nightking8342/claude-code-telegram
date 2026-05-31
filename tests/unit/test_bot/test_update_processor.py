@@ -30,6 +30,15 @@ def _make_update(callback_data: str | None = None) -> Update:
     return update
 
 
+def _make_message_update(text: str) -> Update:
+    """Build a minimal Update mock with text."""
+    update = _make_update(None)
+    msg = MagicMock()
+    msg.text = text
+    update.effective_message = msg
+    return update
+
+
 # ---------------------------------------------------------------------------
 # _is_priority_callback
 # ---------------------------------------------------------------------------
@@ -43,6 +52,28 @@ class TestIsPriorityCallback:
     def test_cd_callback_not_priority(self):
         update = _make_update("cd:my_project")
         assert StopAwareUpdateProcessor._is_priority_callback(update) is False
+
+
+class TestBtwCommandPriority:
+    def test_btw_command_detected(self):
+        update = _make_message_update("/btw what is running?")
+        assert StopAwareUpdateProcessor._is_btw_command(update) is True
+
+    def test_btw_command_with_bot_username_detected(self):
+        update = _make_message_update("/btw@testbot what is running?")
+        assert StopAwareUpdateProcessor._is_btw_command(update) is True
+
+    def test_btw_command_uppercase_detected(self):
+        update = _make_message_update("/BTW what is running?")
+        assert StopAwareUpdateProcessor._is_btw_command(update) is True
+
+    def test_btw_command_without_space_detected(self):
+        update = _make_message_update("/btw\u72b6\u6001")
+        assert StopAwareUpdateProcessor._is_btw_command(update) is True
+
+    def test_btw_prefix_not_detected(self):
+        update = _make_message_update("/btw2 nope")
+        assert StopAwareUpdateProcessor._is_btw_command(update) is False
 
     def test_no_callback_query(self):
         update = _make_update(None)
@@ -108,6 +139,45 @@ class TestStopCallbackBypassesLock:
             "regular_start",
             "stop_start",
             "stop_end",
+            "regular_end",
+        ]
+
+    async def test_btw_command_runs_while_lock_held(self):
+        """A /btw command runs immediately while a regular update is active."""
+        processor = StopAwareUpdateProcessor()
+
+        execution_order: list[str] = []
+        lock_acquired = asyncio.Event()
+        btw_done = asyncio.Event()
+
+        async def slow_coroutine():
+            execution_order.append("regular_start")
+            lock_acquired.set()
+            await btw_done.wait()
+            execution_order.append("regular_end")
+
+        async def btw_coroutine():
+            execution_order.append("btw_start")
+            execution_order.append("btw_end")
+            btw_done.set()
+
+        regular_update = _make_update(None)
+        btw_update = _make_message_update("/btw status?")
+
+        regular_task = asyncio.create_task(
+            processor.do_process_update(regular_update, slow_coroutine())
+        )
+        await lock_acquired.wait()
+        btw_task = asyncio.create_task(
+            processor.do_process_update(btw_update, btw_coroutine())
+        )
+
+        await asyncio.gather(regular_task, btw_task)
+
+        assert execution_order == [
+            "regular_start",
+            "btw_start",
+            "btw_end",
             "regular_end",
         ]
 

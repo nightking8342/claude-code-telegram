@@ -266,7 +266,6 @@ CLAUDE_MAX_COST_PER_USER=10.0
 DEBUG=true
 DEVELOPMENT_MODE=true
 LOG_LEVEL=DEBUG
-ENVIRONMENT=development
 RATE_LIMIT_REQUESTS=100
 CLAUDE_TIMEOUT_SECONDS=600
 ```
@@ -348,7 +347,6 @@ ls -la /path/to/your/projects
 ## Production Deployment
 
 ```bash
-ENVIRONMENT=production
 DEBUG=false
 LOG_LEVEL=INFO
 RATE_LIMIT_REQUESTS=5

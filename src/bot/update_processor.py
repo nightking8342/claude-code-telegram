@@ -7,6 +7,7 @@ AskUserQuestion hook Future.
 """
 
 import asyncio
+import re
 from typing import Any, Awaitable, Set
 
 from telegram import Update
@@ -29,6 +30,10 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
     """
 
     _PRIORITY_PREFIXES = ("stop:", "auq:")
+    _BTW_COMMAND_RE = re.compile(
+        r"^/btw(?:@[A-Za-z0-9_]+)?(?:$|\s|[^A-Za-z0-9_])",
+        re.IGNORECASE,
+    )
 
     # User IDs currently waiting for free-text "Other" answer.
     # Populated by the orchestrator's ``_handle_auq_callback`` when the user
@@ -69,13 +74,26 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
             and user.id in cls.auq_other_waiting
         )
 
+    @classmethod
+    def _is_btw_command(cls, update: object) -> bool:
+        """Return True for /btw commands that should run immediately."""
+        if not isinstance(update, Update):
+            return False
+        msg = update.effective_message
+        text = getattr(msg, "text", None) if msg is not None else None
+        return isinstance(text, str) and cls._BTW_COMMAND_RE.match(text) is not None
+
     async def do_process_update(
         self,
         update: object,
         coroutine: Awaitable[Any],
     ) -> None:
         """Process an update, applying sequential lock for non-priority updates."""
-        if self._is_priority_callback(update) or self._is_auq_other_reply(update):
+        if (
+            self._is_priority_callback(update)
+            or self._is_auq_other_reply(update)
+            or self._is_btw_command(update)
+        ):
             # Run immediately -- no sequential lock
             await coroutine
         else:

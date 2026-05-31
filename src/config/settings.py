@@ -5,7 +5,6 @@ Features:
 - Type validation
 - Default values
 - Computed properties
-- Environment-specific settings
 """
 
 import json
@@ -16,6 +15,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.utils.constants import (
+    DEFAULT_CLAUDE_BTW_TIMEOUT_SECONDS,
     DEFAULT_CLAUDE_MAX_COST_PER_REQUEST,
     DEFAULT_CLAUDE_MAX_COST_PER_USER,
     DEFAULT_CLAUDE_MAX_TURNS,
@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     claude_timeout_seconds: int = Field(
         DEFAULT_CLAUDE_TIMEOUT_SECONDS,
         description="Claude timeout in seconds (0 or negative = no timeout, max_turns still applies)",
+    )
+    claude_btw_timeout_seconds: int = Field(
+        DEFAULT_CLAUDE_BTW_TIMEOUT_SECONDS,
+        ge=1,
+        description="Timeout in seconds for /btw side questions",
     )
     claude_max_cost_per_user: float = Field(
         DEFAULT_CLAUDE_MAX_COST_PER_USER, description="Max cost per user"

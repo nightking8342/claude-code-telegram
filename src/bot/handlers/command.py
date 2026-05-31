@@ -74,8 +74,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     ):
         if manager is None:
             await update.message.reply_text(
-                "❌ <b>项目话题模式配置错误</b>\n\n"
-                "话题管理器未初始化。",
+                "❌ <b>项目话题模式配置错误</b>\n\n" "话题管理器未初始化。",
                 parse_mode="HTML",
             )
             return
@@ -137,9 +136,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Add quick action buttons
     keyboard = [
         [
-            InlineKeyboardButton(
-                "📁 显示项目", callback_data="action:show_projects"
-            ),
+            InlineKeyboardButton("📁 显示项目", callback_data="action:show_projects"),
             InlineKeyboardButton("❓ 获取帮助", callback_data="action:help"),
         ],
         [
@@ -331,17 +328,11 @@ async def new_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     keyboard = [
         [
-            InlineKeyboardButton(
-                "📝 开始编码", callback_data="action:start_coding"
-            ),
-            InlineKeyboardButton(
-                "📁 切换项目", callback_data="action:show_projects"
-            ),
+            InlineKeyboardButton("📝 开始编码", callback_data="action:start_coding"),
+            InlineKeyboardButton("📁 切换项目", callback_data="action:show_projects"),
         ],
         [
-            InlineKeyboardButton(
-                "📋 快捷操作", callback_data="action:quick_actions"
-            ),
+            InlineKeyboardButton("📋 快捷操作", callback_data="action:quick_actions"),
             InlineKeyboardButton("❓ 帮助", callback_data="action:help"),
         ],
     ]
@@ -376,8 +367,7 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     try:
         if not claude_integration:
             await update.message.reply_text(
-                "❌ <b>Claude 集成不可用</b>\n\n"
-                "Claude 集成未正确配置。"
+                "❌ <b>Claude 集成不可用</b>\n\n" "Claude 集成未正确配置。"
             )
             return
 
@@ -574,9 +564,7 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         keyboard.append(
             [
                 InlineKeyboardButton("🔄 刷新", callback_data="action:refresh_ls"),
-                InlineKeyboardButton(
-                    "📁 项目", callback_data="action:show_projects"
-                ),
+                InlineKeyboardButton("📁 项目", callback_data="action:show_projects"),
             ]
         )
 
@@ -646,9 +634,7 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 )
 
                 if not valid:
-                    await update.message.reply_text(
-                        f"❌ <b>访问被拒绝</b>\n\n{error}"
-                    )
+                    await update.message.reply_text(f"❌ <b>访问被拒绝</b>\n\n{error}")
 
                     # Log security violation
                     if audit_logger:
@@ -665,8 +651,7 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         if project_root and not _is_within_root(resolved_path, project_root):
             await update.message.reply_text(
-                "❌ <b>访问被拒绝</b>\n\n"
-                "在话题模式下，导航仅限于当前项目根目录。",
+                "❌ <b>访问被拒绝</b>\n\n" "在话题模式下，导航仅限于当前项目根目录。",
                 parse_mode="HTML",
             )
             return
@@ -705,9 +690,7 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             else:
                 # No session for this directory - clear the current one
                 context.user_data["claude_session_id"] = None
-                resumed_session_info = (
-                    "\n🆕 无现有 session。发送消息开始新对话。"
-                )
+                resumed_session_info = "\n🆕 无现有 session。发送消息开始新对话。"
 
         # Send confirmation
         relative_base = project_root or settings.approved_directory
@@ -785,8 +768,7 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             projects = registry.list_enabled()
             if not projects:
                 await update.message.reply_text(
-                    "📁 <b>未找到项目</b>\n\n"
-                    "项目配置中没有已启用的项目。",
+                    "📁 <b>未找到项目</b>\n\n" "项目配置中没有已启用的项目。",
                     parse_mode="HTML",
                 )
                 return
@@ -838,9 +820,7 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         keyboard.append(
             [
                 InlineKeyboardButton("🏠 返回根目录", callback_data="cd:/"),
-                InlineKeyboardButton(
-                    "🔄 刷新", callback_data="action:show_projects"
-                ),
+                InlineKeyboardButton("🔄 刷新", callback_data="action:show_projects"),
             ]
         )
 
@@ -849,9 +829,7 @@ async def show_projects(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         project_list = "\n".join([f"• <code>{project}/</code>" for project in projects])
 
         await update.message.reply_text(
-            f"📁 <b>可用项目</b>\n\n"
-            f"{project_list}\n\n"
-            f"点击下方项目即可进入:",
+            f"📁 <b>可用项目</b>\n\n" f"{project_list}\n\n" f"点击下方项目即可进入:",
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
@@ -1044,9 +1022,7 @@ async def end_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     keyboard = [
         [
             InlineKeyboardButton("🆕 新建 Session", callback_data="action:new_session"),
-            InlineKeyboardButton(
-                "📁 切换项目", callback_data="action:show_projects"
-            ),
+            InlineKeyboardButton("📁 切换项目", callback_data="action:show_projects"),
         ],
         [
             InlineKeyboardButton("📊 状态", callback_data="action:status"),
@@ -1096,8 +1072,7 @@ async def quick_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         quick_action_manager = features.get_quick_actions()
         if not quick_action_manager:
             await update.message.reply_text(
-                "❌ <b>快捷操作不可用</b>\n\n"
-                "快捷操作服务不可用。"
+                "❌ <b>快捷操作不可用</b>\n\n" "快捷操作服务不可用。"
             )
             return
 
@@ -1164,8 +1139,7 @@ async def git_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         git_integration = features.get_git_integration()
         if not git_integration:
             await update.message.reply_text(
-                "❌ <b>Git 集成不可用</b>\n\n"
-                "Git 集成服务不可用。"
+                "❌ <b>Git 集成不可用</b>\n\n" "Git 集成服务不可用。"
             )
             return
 
@@ -1440,21 +1414,77 @@ async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     marker_path.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")
 
     if sys.platform == "win32":
-        # Windows: no systemd, so re-launch ourselves then exit.
-        # Use the VBS wrapper (same as Scheduled Task) so the new process
-        # runs with a hidden window and stdout redirected to bot.log.
+        # Windows: no systemd, so a detached helper waits for this process to
+        # exit cleanly, then starts the hidden VBS launcher. Keep the helper as
+        # a small .cmd file so restart failures leave breadcrumbs on disk.
         import subprocess
 
-        vbs_path = Path.home() / ".claude-tg-bot" / "start-bot.vbs"
+        current_pid = os.getpid()
+        state_dir = Path.home() / ".claude-tg-bot"
+        vbs_path = state_dir / "start-bot.vbs"
         if vbs_path.exists():
+            helper_path = state_dir / "restart-helper.vbs"
+            helper_log_path = state_dir / "restart-helper.log"
+            helper_path.write_text(
+                "\r\n".join(
+                    [
+                        "Option Explicit",
+                        "Dim args, parentPid, launcher, logPath",
+                        "Dim shell, fso, svc, procs, deadline",
+                        "Set args = WScript.Arguments",
+                        "parentPid = args.Item(0)",
+                        "launcher = args.Item(1)",
+                        "logPath = args.Item(2)",
+                        'Set shell = CreateObject("WScript.Shell")',
+                        'Set fso = CreateObject("Scripting.FileSystemObject")',
+                        "",
+                        "Sub WriteLog(message)",
+                        "  Dim file",
+                        "  Set file = fso.OpenTextFile(logPath, 8, True)",
+                        '  file.WriteLine Now & " " & message',
+                        "  file.Close",
+                        "End Sub",
+                        "",
+                        'WriteLog "helper started parent=" & parentPid & " launcher=" & launcher',
+                        'Set svc = GetObject("winmgmts:\\\\.\\root\\cimv2")',
+                        'deadline = DateAdd("s", 90, Now)',
+                        "Do",
+                        '  Set procs = svc.ExecQuery("SELECT ProcessId FROM Win32_Process WHERE ProcessId=" & parentPid)',
+                        "  If procs.Count = 0 Then Exit Do",
+                        "  If Now >= deadline Then Exit Do",
+                        "  WScript.Sleep 500",
+                        "Loop",
+                        'WriteLog "parent wait complete"',
+                        "WScript.Sleep 2000",
+                        "If Not fso.FileExists(launcher) Then",
+                        '  WriteLog "launcher missing: " & launcher',
+                        "  WScript.Quit 1",
+                        "End If",
+                        'WriteLog "starting launcher"',
+                        'shell.Run "wscript.exe //B //NoLogo " & Chr(34) & launcher & Chr(34), 0, False',
+                        'WriteLog "launcher dispatched"',
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
             subprocess.Popen(
-                ["wscript.exe", str(vbs_path)],
-                cwd=str(Path.home() / ".claude-tg-bot"),
+                [
+                    "wscript.exe",
+                    "//B",
+                    "//NoLogo",
+                    str(helper_path),
+                    str(current_pid),
+                    str(vbs_path),
+                    str(helper_log_path),
+                ],
+                cwd=str(state_dir),
                 close_fds=True,
                 creationflags=subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP,
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-        os._exit(0)
+        signal.raise_signal(signal.SIGTERM)
     else:
         # SIGTERM triggers the existing graceful-shutdown handler in main.py;
         # systemd Restart=always will bring the process back up.
