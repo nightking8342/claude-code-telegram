@@ -11,8 +11,8 @@ import asyncio
 from typing import Any, Callable, Dict, Optional
 
 import structlog
-from telegram import Update
-from telegram.error import NetworkError
+from telegram import BotCommandScopeAllPrivateChats, Update
+from telegram.error import NetworkError, RetryAfter
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -43,6 +43,7 @@ class ClaudeCodeBot:
         self.feature_registry: Optional[FeatureRegistry] = None
         self.orchestrator = MessageOrchestrator(settings, dependencies)
         self.recovery = PollingRecoveryManager()
+        self._polling_reconnect_task: Optional[asyncio.Task] = None
 
     async def initialize(self) -> None:
         """Initialize bot application. Idempotent — safe to call multiple times."""
@@ -113,12 +114,23 @@ class ClaudeCodeBot:
         logger.info("Bot initialization complete")
 
     async def _set_bot_commands(self) -> None:
-        """Set bot command menu via orchestrator (default + Chinese)."""
+        """Set bot command menu via orchestrator (default/private + Chinese)."""
         commands = await self.orchestrator.get_bot_commands()
         await self.app.bot.set_my_commands(commands)
+        private_scope = BotCommandScopeAllPrivateChats()
+        await self.app.bot.set_my_commands(commands, scope=private_scope)
         commands_zh = await self.orchestrator.get_bot_commands_zh()
         await self.app.bot.set_my_commands(commands_zh, language_code="zh")
-        logger.info("Bot commands set", commands=[cmd.command for cmd in commands])
+        await self.app.bot.set_my_commands(
+            commands_zh,
+            scope=private_scope,
+            language_code="zh",
+        )
+        logger.info(
+            "Bot commands set",
+            commands=[cmd.command for cmd in commands],
+            scopes=["default", "all_private_chats"],
+        )
 
     def _register_handlers(self) -> None:
         """Register handlers via orchestrator (mode-aware)."""
@@ -230,13 +242,10 @@ class ClaudeCodeBot:
                     allowed_updates=Update.ALL_TYPES,
                 )
             else:
-                # Polling mode - initialize and start polling manually
-                await self.app.initialize()
+                # Polling mode - start polling manually. initialize() has
+                # already initialized the Application above.
                 await self.app.start()
-                await self.app.updater.start_polling(
-                    allowed_updates=Update.ALL_TYPES,
-                    drop_pending_updates=True,
-                )
+                await self._start_polling(drop_pending_updates=True)
 
                 # Keep running until manually stopped
                 while self.is_running:
@@ -246,6 +255,106 @@ class ClaudeCodeBot:
             raise ClaudeCodeTelegramError(f"Failed to start bot: {str(e)}") from e
         finally:
             self.is_running = False
+
+    async def _start_polling(self, *, drop_pending_updates: bool) -> None:
+        """Start Telegram polling with a recovery callback for transport faults."""
+
+        await self.app.updater.start_polling(
+            poll_interval=0.2,
+            timeout=2,
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=drop_pending_updates,
+            error_callback=self._polling_error_callback,
+        )
+
+    def _polling_error_callback(self, exc: BaseException) -> None:
+        """Schedule polling recovery for errors PTB logs outside handlers."""
+
+        error_text = str(exc)
+        logger.warning(
+            "Polling transport error",
+            error=error_text,
+            error_type=type(exc).__name__,
+        )
+
+        # RetryAfter from Telegram rate limit — always recoverable, pass
+        # the exception so _recover_polling can respect the wait time
+        if isinstance(exc, RetryAfter):
+            if self._polling_reconnect_task and not self._polling_reconnect_task.done():
+                return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                logger.warning("Cannot recover polling: no running event loop")
+                return
+            self._polling_reconnect_task = loop.create_task(
+                self._recover_polling("RetryAfter", exc)
+            )
+            return
+
+        lowered = error_text.lower()
+        recoverable = (
+            "conflict" in lowered
+            or "terminated by other getupdates" in lowered
+            or "remoteprotocolerror" in lowered
+            or "server disconnected without sending a response" in lowered
+        )
+        if not recoverable:
+            return
+
+        if self._polling_reconnect_task and not self._polling_reconnect_task.done():
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("Cannot recover polling: no running event loop")
+            return
+
+        self._polling_reconnect_task = loop.create_task(
+            self._recover_polling(type(exc).__name__)
+        )
+
+    async def _recover_polling(
+        self, reason: str, exc: BaseException | None = None
+    ) -> None:
+        """Stop and restart polling after Telegram transport gets wedged."""
+
+        # For RetryAfter: respect Telegram's requested wait time + buffer
+        if reason == "RetryAfter" and isinstance(exc, RetryAfter):
+            wait_seconds = int(exc.retry_after) + 2
+            logger.warning(
+                "Telegram rate limit — waiting before recovery",
+                retry_after_s=exc.retry_after,
+                total_wait_s=wait_seconds,
+            )
+        elif reason == "Conflict":
+            # Short wait: the other instance should have been killed by now
+            wait_seconds = 6
+        else:
+            wait_seconds = 3
+
+        await asyncio.sleep(wait_seconds)
+        if not self.is_running or not self.app or not self.app.updater:
+            return
+
+        logger.warning("Recovering Telegram polling", reason=reason)
+        try:
+            if self.app.updater.running:
+                await self.app.updater.stop()
+        except Exception as exc:
+            logger.warning("Failed to stop polling during recovery", error=str(exc))
+
+        await asyncio.sleep(3 if reason == "Conflict" else 2)
+
+        if not self.is_running or not self.app or not self.app.updater:
+            return
+
+        try:
+            await self._start_polling(drop_pending_updates=True)
+            logger.info("Telegram polling recovered", reason=reason)
+        except Exception as exc:
+            logger.error("Failed to recover Telegram polling", error=str(exc))
 
     async def stop(self) -> None:
         """Gracefully stop the bot."""
