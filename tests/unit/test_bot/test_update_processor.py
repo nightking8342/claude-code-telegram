@@ -49,6 +49,10 @@ class TestIsPriorityCallback:
         update = _make_update("stop:123")
         assert StopAwareUpdateProcessor._is_priority_callback(update) is True
 
+    def test_plan_callback_detected(self):
+        update = _make_update("plan:123:exit_approve")
+        assert StopAwareUpdateProcessor._is_priority_callback(update) is True
+
     def test_cd_callback_not_priority(self):
         update = _make_update("cd:my_project")
         assert StopAwareUpdateProcessor._is_priority_callback(update) is False
@@ -88,6 +92,24 @@ class TestBtwCommandPriority:
         cb.data = None
         update.callback_query = cb
         assert StopAwareUpdateProcessor._is_priority_callback(update) is False
+
+
+class TestPlanFeedbackPriority:
+    def test_plan_feedback_reply_detected(self):
+        StopAwareUpdateProcessor.plan_feedback_waiting.add(123)
+        try:
+            update = _make_message_update("please adjust the plan")
+            update.effective_user.id = 123
+
+            assert StopAwareUpdateProcessor._is_plan_feedback_reply(update) is True
+        finally:
+            StopAwareUpdateProcessor.plan_feedback_waiting.discard(123)
+
+    def test_other_text_not_plan_feedback(self):
+        update = _make_message_update("regular text")
+        update.effective_user.id = 456
+
+        assert StopAwareUpdateProcessor._is_plan_feedback_reply(update) is False
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +200,45 @@ class TestStopCallbackBypassesLock:
             "regular_start",
             "btw_start",
             "btw_end",
+            "regular_end",
+        ]
+
+    async def test_plan_callback_runs_while_lock_held(self):
+        """A plan callback resolves Claude's plan hook without waiting."""
+        processor = StopAwareUpdateProcessor()
+
+        execution_order: list[str] = []
+        lock_acquired = asyncio.Event()
+        plan_done = asyncio.Event()
+
+        async def slow_coroutine():
+            execution_order.append("regular_start")
+            lock_acquired.set()
+            await plan_done.wait()
+            execution_order.append("regular_end")
+
+        async def plan_coroutine():
+            execution_order.append("plan_start")
+            execution_order.append("plan_end")
+            plan_done.set()
+
+        regular_update = _make_update(None)
+        plan_update = _make_update("plan:42:exit_approve")
+
+        regular_task = asyncio.create_task(
+            processor.do_process_update(regular_update, slow_coroutine())
+        )
+        await lock_acquired.wait()
+        plan_task = asyncio.create_task(
+            processor.do_process_update(plan_update, plan_coroutine())
+        )
+
+        await asyncio.gather(regular_task, plan_task)
+
+        assert execution_order == [
+            "regular_start",
+            "plan_start",
+            "plan_end",
             "regular_end",
         ]
 

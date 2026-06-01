@@ -1,9 +1,9 @@
 """Selective-concurrency update processor for PTB.
 
 Regular updates (messages, commands) process sequentially -- one at a time.
-Priority callbacks (stop:*, auq:*) bypass the queue and run immediately so
+Priority callbacks (stop:*, auq:*, plan:*) bypass the queue and run immediately so
 they can interrupt the currently-running handler or resolve an
-AskUserQuestion hook Future.
+AskUserQuestion/plan-mode hook Future.
 """
 
 import asyncio
@@ -21,7 +21,7 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
     The base class holds a semaphore (max 256) then calls our
     ``do_process_update()``.
 
-    For priority callbacks (``stop:*``, ``auq:*``): we just ``await coroutine``
+    For priority callbacks (``stop:*``, ``auq:*``, ``plan:*``): we just ``await coroutine``
     -- runs immediately.
     For text messages from users in ``auq_other_waiting``: also bypass the lock
     so the answer can resolve the hook Future while Claude is still running.
@@ -29,7 +29,7 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
     runs at a time.
     """
 
-    _PRIORITY_PREFIXES = ("stop:", "auq:")
+    _PRIORITY_PREFIXES = ("stop:", "auq:", "plan:")
     _BTW_COMMAND_RE = re.compile(
         r"^/btw(?:@[A-Za-z0-9_]+)?(?:$|\s|[^A-Za-z0-9_])",
         re.IGNORECASE,
@@ -41,6 +41,7 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
     # the hook Future.  Using a class-level set so the orchestrator and
     # processor share state without a circular import.
     auq_other_waiting: Set[int] = set()
+    plan_feedback_waiting: Set[int] = set()
 
     def __init__(self) -> None:
         # High limit so priority callbacks are never blocked by semaphore
@@ -75,6 +76,21 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
         )
 
     @classmethod
+    def _is_plan_feedback_reply(cls, update: object) -> bool:
+        """Return True if this is a text reply to an ExitPlanMode feedback prompt."""
+        if not isinstance(update, Update):
+            return False
+        msg = update.effective_message
+        user = update.effective_user
+        if msg is None or user is None:
+            return False
+        return (
+            hasattr(msg, "text")
+            and msg.text is not None
+            and user.id in cls.plan_feedback_waiting
+        )
+
+    @classmethod
     def _is_btw_command(cls, update: object) -> bool:
         """Return True for /btw commands that should run immediately."""
         if not isinstance(update, Update):
@@ -92,6 +108,7 @@ class StopAwareUpdateProcessor(BaseUpdateProcessor):
         if (
             self._is_priority_callback(update)
             or self._is_auq_other_reply(update)
+            or self._is_plan_feedback_reply(update)
             or self._is_btw_command(update)
         ):
             # Run immediately -- no sequential lock

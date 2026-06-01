@@ -538,6 +538,26 @@ class MessageOrchestrator:
             )
         )
 
+        # Recursive repo browser callbacks
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_repo_browse_cb),
+                pattern=r"^repo:",
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_repo_use_cb),
+                pattern=r"^repo_use:",
+            )
+        )
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_repo_back_cb),
+                pattern=r"^repo_back:",
+            )
+        )
+
         # Provider switch buttons
         app.add_handler(
             CallbackQueryHandler(
@@ -1266,7 +1286,9 @@ class MessageOrchestrator:
         working_directory = Path(
             runtime_snapshot.working_directory
             if runtime_snapshot
-            else context.user_data.get("current_directory", self.settings.approved_directory)
+            else context.user_data.get(
+                "current_directory", self.settings.approved_directory
+            )
         )
 
         claude_integration = context.bot_data.get("claude_integration")
@@ -1331,7 +1353,9 @@ class MessageOrchestrator:
                 await audit_logger.log_command(
                     user_id=user_id,
                     command="btw",
-                    args=["runtime_snapshot" if runtime_snapshot else "history_session"],
+                    args=[
+                        "runtime_snapshot" if runtime_snapshot else "history_session"
+                    ],
                     success=True,
                 )
 
@@ -1359,7 +1383,9 @@ class MessageOrchestrator:
                 await audit_logger.log_command(
                     user_id=user_id,
                     command="btw",
-                    args=["runtime_snapshot" if runtime_snapshot else "history_session"],
+                    args=[
+                        "runtime_snapshot" if runtime_snapshot else "history_session"
+                    ],
                     success=False,
                 )
 
@@ -2418,110 +2444,250 @@ class MessageOrchestrator:
     async def agentic_repo(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """List repos in workspace or switch to one.
+        """Browse repos in workspace with recursive navigation.
 
-        /repo          — list subdirectories with git indicators
-        /repo <name>   — switch to that directory, resume session if available
+        /repo              -- browse top-level directories
+        /repo <path>       -- switch to that path directly (supports deep paths)
         """
         args = update.message.text.split()[1:] if update.message.text else []
         base = self.settings.approved_directory
-        current_dir = context.user_data.get("current_directory", base)
 
         if args:
-            # Switch to named repo
-            target_name = args[0]
-            target_path = base / target_name
-            if not target_path.is_dir():
+            # /repo <path> -- direct switch, supports deep paths
+            target_path = (base / args[0]).resolve()
+            if not self._is_within(target_path, base) or not target_path.is_dir():
                 await update.message.reply_text(
-                    f"目录不存在：<code>{escape_html(target_name)}</code>",
+                    f"目录不存在：" f"<code>{escape_html(args[0])}</code>",
                     parse_mode="HTML",
                 )
                 return
-
-            context.user_data["current_directory"] = target_path
-
-            # Try to find a resumable session
-            claude_integration = context.bot_data.get("claude_integration")
-            session_id = None
-            existing_session = None
-            if claude_integration:
-                existing_session = await claude_integration._find_resumable_session(
-                    update.effective_user.id, target_path
-                )
-                if existing_session:
-                    session_id = existing_session.session_id
-            context.user_data["claude_session_id"] = session_id
-
-            is_git = (target_path / ".git").is_dir()
-            git_badge = " (git)" if is_git else ""
-
-            switch_msg = (
-                f"已切换到 <code>{escape_html(target_name)}/</code>" f"{git_badge}"
-            )
-
-            if session_id and claude_integration:
-                resume_text = await self._build_session_resume_text(
-                    session_id,
-                    target_path,
-                    claude_integration,
-                    session_meta=existing_session,
-                )
-                await update.message.reply_text(
-                    f"{switch_msg}\n\n{resume_text}",
-                    parse_mode="HTML",
-                )
-            else:
-                await update.message.reply_text(switch_msg, parse_mode="HTML")
+            await self._repo_switch(update, context, target_path, from_command=True)
             return
 
-        # No args — list repos
+        # /repo -- browse top-level
+        await self._repo_browse(update, context, base)
+
+    # ------------------------------------------------------------------ #
+    #  /repo recursive browsing helpers                                    #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _repo_list_entries(browse_path: Path) -> List[Path]:
+        """Return sorted non-hidden subdirectories of browse_path."""
         try:
-            entries = sorted(
+            return sorted(
                 [
                     d
-                    for d in base.iterdir()
+                    for d in browse_path.iterdir()
                     if d.is_dir() and not d.name.startswith(".")
                 ],
                 key=lambda d: d.name,
             )
-        except OSError as e:
-            await update.message.reply_text(f"读取工作区出错：{e}")
-            return
+        except OSError:
+            return []
 
+    async def _repo_browse(
+        self,
+        source: Any,
+        context: ContextTypes.DEFAULT_TYPE,
+        browse_path: Path,
+        *,
+        is_edit: bool = False,
+    ) -> None:
+        """Show directory listing with browse/use/back buttons.
+
+        Args:
+            source: Update (from /repo command) or CallbackQuery (button).
+            context: PTB context.
+            browse_path: Absolute path to list.
+            is_edit: True to edit existing message, False to send new.
+        """
+        base = self.settings.approved_directory
+        entries = self._repo_list_entries(browse_path)
+
+        rel = browse_path.relative_to(base)
+        rel_str = str(rel).replace(chr(92), "/") if str(rel) != "." else ""
+        display_path = rel_str if rel_str else "workspace"
+
+        lines_list: List[str] = [
+            f"\U0001f4c2 <b>浏览: " f"{escape_html(display_path)}/</b>\n"
+        ]
         if not entries:
-            await update.message.reply_text(
-                f"<code>{escape_html(str(base))}</code> 中没有项目。\n"
-                '可以告诉我克隆一个，例如 <i>"clone org/repo"</i>。',
+            lines_list.append("<i>（空目录）</i>")
+        else:
+            for d in entries:
+                is_git = (d / ".git").is_dir()
+                icon = "\U0001f4e6" if is_git else "\U0001f4c1"
+                lines_list.append(f"{icon} <code>{escape_html(d.name)}/</code>")
+        text = "\n".join(lines_list)
+
+        # Build directory buttons
+        buttons: List[InlineKeyboardButton] = []
+        for d in entries:
+            child_rel = f"{rel_str}/{d.name}" if rel_str else d.name
+            cb = f"repo:{child_rel}"
+            if len(cb.encode("utf-8")) > 64:
+                cb = f"repo_use:{child_rel}"
+            buttons.append(InlineKeyboardButton(d.name, callback_data=cb))
+
+        # Action row: "use this path" + optional "back"
+        action_row: List[InlineKeyboardButton] = [
+            InlineKeyboardButton(
+                "\U0001f4c2 使用此路径",
+                callback_data=f"repo_use:{rel_str}",
+            )
+        ]
+        if rel_str:
+            parent = str(rel.parent).replace(chr(92), "/") if str(rel) != "." else ""
+            action_row.append(
+                InlineKeyboardButton(
+                    "⬅️ 返回",
+                    callback_data=f"repo_back:{parent}",
+                )
+            )
+
+        reply_markup = InlineKeyboardMarkup(
+            self._chunk_buttons(buttons, 2) + [action_row]
+        )
+
+        if is_edit:
+            await source.edit_message_text(
+                text, parse_mode="HTML", reply_markup=reply_markup
+            )
+        else:
+            await source.message.reply_text(
+                text, parse_mode="HTML", reply_markup=reply_markup
+            )
+
+    async def _repo_switch(
+        self,
+        source: Any,
+        context: ContextTypes.DEFAULT_TYPE,
+        target_path: Path,
+        *,
+        from_command: bool = False,
+    ) -> None:
+        """Switch to target_path, find resumable session, show result."""
+        base = self.settings.approved_directory
+        display = str(target_path.relative_to(base)).replace(chr(92), "/")
+        context.user_data["current_directory"] = target_path
+
+        # Try to find a resumable session
+        claude_integration = context.bot_data.get("claude_integration")
+        session_id: Optional[str] = None
+        existing_session = None
+        user_id = (
+            source.from_user.id
+            if hasattr(source, "from_user")
+            else source.effective_user.id
+        )
+        if claude_integration:
+            existing_session = await claude_integration._find_resumable_session(
+                user_id, target_path
+            )
+            if existing_session:
+                session_id = existing_session.session_id
+        context.user_data["claude_session_id"] = session_id
+
+        is_git = (target_path / ".git").is_dir()
+        git_badge = " (git)" if is_git else ""
+        switch_msg = f"已切换到 " f"<code>{escape_html(display)}/</code>{git_badge}"
+
+        if session_id and claude_integration:
+            resume_text = await self._build_session_resume_text(
+                session_id,
+                target_path,
+                claude_integration,
+                session_meta=existing_session,
+            )
+            full_msg = f"{switch_msg}\n\n{resume_text}"
+        else:
+            full_msg = switch_msg
+
+        if from_command:
+            await source.message.reply_text(full_msg, parse_mode="HTML")
+        else:
+            await source.edit_message_text(full_msg, parse_mode="HTML")
+
+        # Audit log
+        audit_logger = context.bot_data.get("audit_logger")
+        if audit_logger:
+            await audit_logger.log_command(
+                user_id=user_id,
+                command="repo",
+                args=[display],
+                success=True,
+            )
+
+    # -- repo callback handlers ---------------------------------------- #
+
+    async def _handle_repo_browse_cb(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle repo:<path> callbacks -- show subdirectory listing."""
+        query = update.callback_query
+        await query.answer()
+
+        raw = query.data[len("repo:") :]
+        base = self.settings.approved_directory
+        target = (base / raw).resolve() if raw else base
+
+        if not self._is_within(target, base) or not target.is_dir():
+            await query.edit_message_text(
+                f"目录不存在：" f"<code>{escape_html(raw)}</code>",
                 parse_mode="HTML",
             )
             return
 
-        lines: List[str] = []
-        keyboard_rows: List[list] = []  # type: ignore[type-arg]
-        current_name = current_dir.name if current_dir != base else None
+        # Leaf directory (no subdirectories) -- switch directly
+        if not self._repo_list_entries(target):
+            await self._repo_switch(query, context, target)
+            return
 
-        for d in entries:
-            is_git = (d / ".git").is_dir()
-            icon = "\U0001f4e6" if is_git else "\U0001f4c1"
-            marker = " \u25c0" if d.name == current_name else ""
-            lines.append(f"{icon} <code>{escape_html(d.name)}/</code>{marker}")
+        await self._repo_browse(query, context, target, is_edit=True)
 
-        # Build inline keyboard (2 per row)
-        for i in range(0, len(entries), 2):
-            row = []
-            for j in range(2):
-                if i + j < len(entries):
-                    name = entries[i + j].name
-                    row.append(InlineKeyboardButton(name, callback_data=f"cd:{name}"))
-            keyboard_rows.append(row)
+    async def _handle_repo_use_cb(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle repo_use:<path> callbacks -- switch to that directory."""
+        query = update.callback_query
+        await query.answer()
 
-        reply_markup = InlineKeyboardMarkup(keyboard_rows)
+        raw = query.data[len("repo_use:") :]
+        base = self.settings.approved_directory
+        target = (base / raw).resolve() if raw else base
 
-        await update.message.reply_text(
-            "<b>项目列表</b>\n\n" + "\n".join(lines),
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
+        if not self._is_within(target, base) or not target.is_dir():
+            await query.edit_message_text(
+                f"目录不存在：" f"<code>{escape_html(raw)}</code>",
+                parse_mode="HTML",
+            )
+            return
+
+        await self._repo_switch(query, context, target)
+
+    async def _handle_repo_back_cb(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle repo_back:<path> callbacks -- navigate back to parent."""
+        query = update.callback_query
+        await query.answer()
+
+        raw = query.data[len("repo_back:") :]
+        base = self.settings.approved_directory
+        target = (base / raw).resolve() if raw else base
+
+        if not self._is_within(target, base):
+            target = base
+
+        await self._repo_browse(query, context, target, is_edit=True)
+
+    @staticmethod
+    def _chunk_buttons(
+        buttons: List[InlineKeyboardButton], per_row: int
+    ) -> List[List[InlineKeyboardButton]]:
+        """Split button list into rows of ``per_row`` buttons."""
+        return [buttons[i : i + per_row] for i in range(0, len(buttons), per_row)]
 
     async def _handle_stop_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -2668,17 +2834,68 @@ class MessageOrchestrator:
             "PreToolUse": [HookMatcher(matcher="AskUserQuestion", hooks=[_auq_hook])]
         }
 
+    @staticmethod
+    def _read_latest_plan_file() -> Optional[str]:
+        """Read the most recently modified plan file from ~/.claude/plans/.
+
+        Returns the file content as a string, or None if no plan files found.
+        """
+        plans_dir = Path.home() / ".claude" / "plans"
+        if not plans_dir.is_dir():
+            return None
+        try:
+            plan_files = sorted(
+                plans_dir.glob("*.md"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            if not plan_files:
+                return None
+            content = plan_files[0].read_text(encoding="utf-8").strip()
+            return content if content else None
+        except OSError:
+            return None
+
     def _build_plan_mode_hook(
         self, bot: Any, chat_id: int, user_id: int
     ) -> Dict[str, Any]:
         """Build PreToolUse hooks for EnterPlanMode / ExitPlanMode.
 
         EnterPlanMode: sends Telegram buttons for user approval.
-        ExitPlanMode: auto-approves and clears plan state.
+        ExitPlanMode: sends plan content + buttons for user approval.
         """
         from claude_agent_sdk import HookMatcher  # type: ignore[import-untyped]
 
         orchestrator_ref = self
+
+        def _load_plan_content(hook_input: Any) -> Optional[str]:
+            """Extract plan text from hook input or read from file."""
+            # Always prefer reading the latest plan file from ~/.claude/plans/
+            content = orchestrator_ref._read_latest_plan_file()
+            if content:
+                return content
+
+            # Fallback: check if tool_input has inline plan content
+            tool_input = (
+                hook_input.get("tool_input", {})
+                if isinstance(hook_input, dict)
+                else {}
+            )
+            plan = tool_input.get("planContent") or tool_input.get("plan")
+            if plan:
+                plan_str = str(plan).strip()
+                plan_path = Path(plan_str)
+                if plan_path.is_file():
+                    try:
+                        return plan_path.read_text(encoding="utf-8").strip()
+                    except OSError:
+                        pass
+                # Only return as inline content if it's long enough
+                # (short strings are likely file paths, not content)
+                if len(plan_str) > 200:
+                    return plan_str
+
+            return None
 
         async def _enter_plan_hook(
             hook_input: Any, stdin: Any = None, hook_context: Any = None
@@ -2775,15 +2992,45 @@ class MessageOrchestrator:
                         ],
                     ]
                 )
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        "📋 <b>Claude 请求退出规划模式</b>\n\n"
-                        "方案已完成，准备开始执行。"
-                    ),
-                    parse_mode="HTML",
-                    reply_markup=kb,
-                )
+
+                # Try to load plan content for display
+                plan_text = _load_plan_content(hook_input)
+
+                if plan_text:
+                    # Send plan as a Markdown document via BytesIO (no temp file)
+                    import io
+
+                    plan_bytes = plan_text.encode("utf-8")
+
+                    # Derive filename from plan title (first # heading)
+                    doc_name = "plan.md"
+                    for line in plan_text.splitlines():
+                        line = line.strip()
+                        if line.startswith("# "):
+                            title = line[2:].strip()
+                            safe = re.sub(r"[^\w\s一-鿿-]", "", title)
+                            safe = re.sub(r"\s+", "-", safe).strip("-")
+                            if safe:
+                                doc_name = f"{safe[:50]}.md"
+                            break
+
+                    await bot.send_document(
+                        chat_id=chat_id,
+                        document=io.BytesIO(plan_bytes),
+                        filename=doc_name,
+                        caption="📋 Claude 请求退出规划模式，请审阅方案。",
+                        reply_markup=kb,
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "📋 <b>Claude 请求退出规划模式</b>\n\n"
+                            "方案已完成，准备开始执行。"
+                        ),
+                        parse_mode="HTML",
+                        reply_markup=kb,
+                    )
                 result = await future
                 action = result.get("action", "deny")
                 if action == "approve":
@@ -2842,10 +3089,14 @@ class MessageOrchestrator:
         }
 
     async def _handle_plan_callback(
-        self, query: Any, context: ContextTypes.DEFAULT_TYPE
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Handle EnterPlanMode / ExitPlanMode button callbacks."""
+        query = update.callback_query
+        if not query:
+            return
         await query.answer()
+
         data = query.data  # "plan:{user_id}:{action}"
         parts = data.split(":")
         if len(parts) != 3:
@@ -2883,23 +3134,24 @@ class MessageOrchestrator:
                 )
             except Exception:
                 pass
-        # ExitPlanMode actions
+        # ExitPlanMode actions — edit caption + remove buttons,
+        # keep the document attachment intact.
         elif action == "exit_approve":
             future.set_result({"action": "approve"})
             try:
-                await query.edit_message_text(
-                    "✅ 已退出规划模式，Claude 开始执行。",
-                    parse_mode="HTML",
+                await query.edit_message_caption(
+                    caption="✅ 已允许，Claude 开始执行…",
                 )
+                await query.edit_message_reply_markup(reply_markup=None)
             except Exception:
                 pass
         elif action == "exit_deny":
             future.set_result({"action": "deny"})
             try:
-                await query.edit_message_text(
-                    "❌ 不执行计划，已退出规划模式。",
-                    parse_mode="HTML",
+                await query.edit_message_caption(
+                    caption="❌ 已拒绝，不执行方案。",
                 )
+                await query.edit_message_reply_markup(reply_markup=None)
             except Exception:
                 pass
         elif action == "exit_feedback":
@@ -2909,10 +3161,10 @@ class MessageOrchestrator:
                 "query": query,
             }
             try:
-                await query.edit_message_text(
-                    "✏️ 请直接发送你的修改意见，Claude 会根据反馈调整方案。",
-                    parse_mode="HTML",
+                await query.edit_message_caption(
+                    caption="✏️ 等待你的修改意见…",
                 )
+                await query.edit_message_reply_markup(reply_markup=None)
             except Exception:
                 pass
 

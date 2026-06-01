@@ -1,28 +1,17 @@
-"""Polling recovery: error classification, reconnect ladder, liveness watchdog.
-
-Prevents bot hangs when Telegram long-polling gets stuck on network errors
-(ConnectTimeout, stale TCP connections, etc.) by:
-1. Classifying errors as recoverable vs fatal
-2. Exponential-backoff reconnection (stop → drain pool → restart)
-3. Background watchdog detecting stuck polling even without error signals
-"""
+"""Unified Telegram polling recovery for manually managed bot lifecycles."""
 
 import asyncio
 import random
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import structlog
-from telegram.error import NetworkError, TimedOut
+from telegram.error import NetworkError, RetryAfter, TimedOut
 
 logger = structlog.get_logger()
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 _WATCHDOG_INTERVAL_S = 30
-_STALL_THRESHOLD_S = 120
 _MAX_RECONNECT_RETRIES = 10
 _INITIAL_BACKOFF_S = 5.0
 _MAX_BACKOFF_S = 60.0
@@ -32,11 +21,6 @@ _RECONNECT_STOP_TIMEOUT_S = 15.0
 _RECONNECT_DRAIN_S = 2.0
 
 
-# ---------------------------------------------------------------------------
-# Error classification
-# ---------------------------------------------------------------------------
-
-
 def _is_polling_conflict(exc: BaseException) -> bool:
     """Detect 'Conflict: terminated by other getUpdates'."""
     msg = str(exc).lower()
@@ -44,16 +28,16 @@ def _is_polling_conflict(exc: BaseException) -> bool:
 
 
 def _is_network_error(exc: BaseException) -> bool:
-    """Detect recoverable network errors (excluding ConnectTimeout)."""
+    """Detect recoverable network errors, excluding connect timeouts."""
     if isinstance(exc, (TimedOut, ConnectionError, OSError)):
         return True
     if isinstance(exc, NetworkError):
-        if _is_connect_timeout(exc):
-            return False
-        return True
+        return not _is_connect_timeout(exc)
+
     name = type(exc).__name__.lower()
     if name in ("timedout", "timeouterror", "connectionerror"):
         return True
+
     msg = str(exc).lower()
     if "timeout" in msg or "socket hang up" in msg:
         return True
@@ -76,11 +60,6 @@ def _is_connect_timeout(exc: BaseException) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Reconnect ladder (exponential backoff)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class _ReconnectLadder:
     """Track consecutive reconnection attempts with exponential backoff."""
@@ -98,7 +77,7 @@ class _ReconnectLadder:
 
     def next_backoff(self) -> float:
         base = min(
-            self.initial_backoff * (self.factor ** self.retries),
+            self.initial_backoff * (self.factor**self.retries),
             self.max_backoff,
         )
         spread = base * self.jitter
@@ -110,21 +89,16 @@ class _ReconnectLadder:
         self.retries = 0
 
 
-# ---------------------------------------------------------------------------
-# Liveness tracker
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class _LivenessTracker:
-    """Track polling activity timestamps for stall detection."""
+    """Small timestamp helper kept for diagnostics and focused tests."""
 
     last_activity: float = field(default_factory=time.monotonic)
 
     def note_activity(self) -> None:
         self.last_activity = time.monotonic()
 
-    def stalled(self, threshold_s: float = _STALL_THRESHOLD_S) -> bool:
+    def stalled(self, threshold_s: float) -> bool:
         return (time.monotonic() - self.last_activity) > threshold_s
 
     @property
@@ -132,40 +106,44 @@ class _LivenessTracker:
         return time.monotonic() - self.last_activity
 
 
-# ---------------------------------------------------------------------------
-# PollingRecoveryManager — public facade
-# ---------------------------------------------------------------------------
-
-
 class PollingRecoveryManager:
-    """Manages polling recovery lifecycle.
-
-    Usage::
-
-        recovery = PollingRecoveryManager(app)
-        # During Application builder (before build):
-        builder.post_init(recovery.on_post_init)
-        # On shutdown:
-        await recovery.shutdown()
-    """
+    """Recover Telegram long-polling transport failures in one place."""
 
     def __init__(self) -> None:
         self._app = None
+        self._start_polling: Callable[..., Awaitable[None]] | None = None
         self._ladder = _ReconnectLadder()
         self._liveness = _LivenessTracker()
         self._watchdog_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
+        self._error_handler_registered = False
         self._reconnecting = False
 
-    async def on_post_init(self, app) -> None:
-        """Called by PTB after Application.initialize()."""
+    async def start(
+        self,
+        app,
+        *,
+        start_polling: Callable[..., Awaitable[None]] | None = None,
+    ) -> None:
+        """Attach recovery to an initialized Application."""
         self._app = app
-        app.add_error_handler(self._error_handler)
-        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+        self._start_polling = start_polling
+
+        if not self._error_handler_registered:
+            app.add_error_handler(self.handle_application_error)
+            self._error_handler_registered = True
+
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+
         logger.info(
             "Polling recovery active",
-            stall_threshold_s=_STALL_THRESHOLD_S,
             watchdog_interval_s=_WATCHDOG_INTERVAL_S,
         )
+
+    async def on_post_init(self, app) -> None:
+        """Compatibility hook for PTB run_polling/run_webhook users."""
+        await self.start(app)
 
     async def shutdown(self) -> None:
         if self._watchdog_task and not self._watchdog_task.done():
@@ -176,95 +154,170 @@ class PollingRecoveryManager:
                 pass
             self._watchdog_task = None
 
-    # --- error handler (registered via add_error_handler) ---
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
 
-    async def _error_handler(self, update, context) -> None:
+    def handle_transport_error(self, exc: BaseException) -> None:
+        """Schedule recovery for Updater.start_polling transport faults."""
+        logger.warning(
+            "Polling transport error",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        self._schedule_reconnect(exc)
+
+    async def handle_application_error(self, update, context) -> None:
+        """Observe Application errors and recover only when they are transport-like."""
         exc = context.error
         if exc is None:
             return
 
-        # Log every error
         logger.error(
-            "Polling error",
+            "Application polling error",
             error=str(exc),
             error_type=type(exc).__name__,
             update_type=type(update).__name__ if update else None,
         )
+        self._schedule_reconnect(exc)
 
-        # Classify
+    def _schedule_reconnect(self, exc: BaseException) -> None:
+        reason = self._classify_recovery_reason(exc)
+        if reason is None:
+            logger.debug(
+                "Ignoring non-recoverable polling error",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return
+
+        self._liveness.note_activity()
+        if self._reconnect_task and not self._reconnect_task.done():
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("Cannot recover polling: no running event loop")
+            return
+
+        self._reconnect_task = loop.create_task(self._reconnect(reason, exc))
+
+    def _classify_recovery_reason(self, exc: BaseException) -> str | None:
+        if isinstance(exc, RetryAfter):
+            return "RetryAfter"
         if _is_polling_conflict(exc):
-            logger.warning("Polling conflict — another instance?")
-            return
-
+            return "Conflict"
         if _is_connect_timeout(exc):
-            logger.warning("ConnectTimeout detected, scheduling reconnect")
-            self._liveness.note_activity()  # reset watchdog timer
-            asyncio.create_task(self._reconnect("connect_timeout"))
-            return
-
+            return "connect_timeout"
         if _is_network_error(exc):
-            logger.warning("Network error detected, scheduling reconnect")
-            self._liveness.note_activity()
-            asyncio.create_task(self._reconnect("network_error"))
-            return
+            return "NetworkError"
 
-        # Fatal / unknown — just log (done above), no reconnect
-        logger.error("Non-recoverable polling error", error=str(exc))
+        msg = str(exc).lower()
+        if (
+            "connecterror" in msg
+            or "networkerror" in msg
+            or "remoteprotocolerror" in msg
+            or "polling task dead" in msg
+            or "polling updater stopped" in msg
+            or "server disconnected without sending a response" in msg
+        ):
+            return "NetworkError"
+        return None
 
-    # --- reconnect ---
-
-    async def _reconnect(self, reason: str) -> None:
+    async def _reconnect(
+        self, reason: str, exc: BaseException | None = None
+    ) -> None:
         if self._reconnecting:
             return
         self._reconnecting = True
 
         try:
-            if self._ladder.exhausted:
-                logger.error(
-                    "Reconnect retries exhausted, restarting process",
-                    retries=self._ladder.retries,
+            await self._initial_reconnect_delay(reason, exc)
+            while not self._ladder.exhausted:
+                attempt = self._ladder.retries + 1
+                logger.warning(
+                    "Recovering Telegram polling",
+                    reason=reason,
+                    attempt=attempt,
+                    max_attempts=self._ladder.max_retries,
                 )
-                import os
 
-                os._exit(1)
+                if await self._try_restart_polling(reason):
+                    self._ladder.reset()
+                    logger.info(
+                        "Telegram polling recovered",
+                        reason=reason,
+                        attempt=attempt,
+                    )
+                    return
 
-            delay = self._ladder.next_backoff()
-            logger.info(
-                "Reconnecting polling",
+                delay = self._ladder.next_backoff()
+                logger.warning(
+                    "Telegram polling recovery attempt failed",
+                    reason=reason,
+                    attempt=attempt,
+                    backoff_s=f"{delay:.1f}",
+                )
+                await asyncio.sleep(delay)
+
+            logger.error(
+                "Failed to recover Telegram polling",
                 reason=reason,
-                attempt=self._ladder.retries,
-                backoff_s=f"{delay:.1f}",
+                attempts=self._ladder.retries,
             )
-            await asyncio.sleep(delay)
+        finally:
+            self._reconnecting = False
+            self._reconnect_task = None
 
-            updater = self._app.updater
-            if updater is None:
-                return
+    async def _initial_reconnect_delay(
+        self, reason: str, exc: BaseException | None
+    ) -> None:
+        if isinstance(exc, RetryAfter):
+            wait_seconds = int(exc.retry_after) + 2
+            logger.warning(
+                "Telegram rate limit - waiting before recovery",
+                retry_after_s=exc.retry_after,
+                total_wait_s=wait_seconds,
+            )
+            await asyncio.sleep(wait_seconds)
+        elif reason == "Conflict":
+            await asyncio.sleep(6)
+        else:
+            await asyncio.sleep(3)
 
-            # Stop
-            try:
+    async def _try_restart_polling(self, reason: str) -> bool:
+        updater = self._app.updater if self._app is not None else None
+        if updater is None:
+            return False
+
+        try:
+            if updater.running:
                 await asyncio.wait_for(
                     updater.stop(), timeout=_RECONNECT_STOP_TIMEOUT_S
                 )
-            except (asyncio.TimeoutError, Exception) as e:
-                logger.warning("Error stopping updater during reconnect", error=str(e))
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning("Error stopping updater during reconnect", error=str(exc))
 
-            # Drain stale connections
-            await _drain_httpx_pool(self._app)
+        await _drain_httpx_pool(self._app)
 
-            # Restart
-            await updater.start_polling(
-                allowed_updates=None,
-                drop_pending_updates=False,
-            )
-            self._liveness.note_activity()
-            logger.info("Polling restarted successfully")
-        except Exception:
-            logger.exception("Reconnect failed")
-        finally:
-            self._reconnecting = False
-
-    # --- watchdog ---
+        try:
+            if self._start_polling is not None:
+                await self._start_polling(drop_pending_updates=True)
+            else:
+                await updater.start_polling(
+                    allowed_updates=None,
+                    drop_pending_updates=(reason != "Conflict"),
+                    error_callback=self.handle_transport_error,
+                )
+            return True
+        except Exception as exc:
+            logger.warning("Error starting updater during reconnect", error=str(exc))
+            return False
 
     async def _watchdog_loop(self) -> None:
         while True:
@@ -275,27 +328,19 @@ class PollingRecoveryManager:
                 logger.exception("Watchdog check failed")
 
     async def _check_liveness(self) -> None:
-        updater = self._app.updater
-        if updater is None or not updater.running:
+        updater = self._app.updater if self._app is not None else None
+        if updater is None or self._reconnecting:
             return
 
-        if self._reconnecting:
+        if not updater.running:
+            logger.warning("Polling updater is stopped, restarting")
+            self._schedule_reconnect(RuntimeError("polling updater stopped"))
             return
 
-        if self._liveness.stalled():
-            logger.warning(
-                "Polling stall detected",
-                idle_s=f"{self._liveness.idle_seconds:.0f}",
-                threshold_s=_STALL_THRESHOLD_S,
-            )
-            asyncio.create_task(self._reconnect("stall_detected"))
-            return
-
-        # Heartbeat: verify long-poll task is alive
-        if hasattr(updater, "_polling_task") and updater._polling_task is not None:
-            if updater._polling_task.done():
-                logger.warning("Long-poll task is dead, restarting")
-                asyncio.create_task(self._reconnect("poll_task_dead"))
+        polling_task = getattr(updater, "_polling_task", None)
+        if polling_task is not None and polling_task.done():
+            logger.warning("Long-poll task is dead, restarting")
+            self._schedule_reconnect(RuntimeError("polling task dead"))
 
 
 async def _drain_httpx_pool(app) -> None:

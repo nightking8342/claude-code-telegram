@@ -1,23 +1,19 @@
-"""Tests for polling recovery: error classification, reconnect ladder, liveness."""
+"""Tests for polling recovery classification and restart flow."""
 
-import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telegram.error import NetworkError, TimedOut
 
 from src.bot.polling_recovery import (
     PollingRecoveryManager,
-    _ReconnectLadder,
-    _LivenessTracker,
     _is_connect_timeout,
     _is_network_error,
     _is_polling_conflict,
+    _LivenessTracker,
+    _ReconnectLadder,
 )
-
-
-# --- Error classification ---
 
 
 class TestIsPollingConflict:
@@ -80,9 +76,6 @@ class TestIsNetworkError:
         assert _is_network_error(exc) is True
 
     def test_network_error_connect_timeout_excluded(self):
-        """NetworkError wrapping ConnectTimeout should be classified as
-        connect_timeout, not generic network_error."""
-
         class ConnectTimeout(Exception):
             pass
 
@@ -90,7 +83,6 @@ class TestIsNetworkError:
         try:
             raise NetworkError("wrapper") from inner
         except NetworkError as exc:
-            # _is_connect_timeout returns True, so _is_network_error returns False
             assert _is_network_error(exc) is False
 
     def test_timeout_in_message(self):
@@ -104,9 +96,6 @@ class TestIsNetworkError:
     def test_non_network(self):
         exc = ValueError("bad value")
         assert _is_network_error(exc) is False
-
-
-# --- Reconnect ladder ---
 
 
 class TestReconnectLadder:
@@ -124,30 +113,25 @@ class TestReconnectLadder:
         ladder = _ReconnectLadder(
             initial_backoff=5.0, factor=2.0, jitter=0.0, max_backoff=60.0
         )
-        b1 = ladder.next_backoff()
-        b2 = ladder.next_backoff()
-        b3 = ladder.next_backoff()
-        assert b1 == 5.0
-        assert b2 == 10.0
-        assert b3 == 20.0
+        assert ladder.next_backoff() == 5.0
+        assert ladder.next_backoff() == 10.0
+        assert ladder.next_backoff() == 20.0
         assert ladder.retries == 3
 
     def test_backoff_capped(self):
         ladder = _ReconnectLadder(
             initial_backoff=5.0, factor=2.0, jitter=0.0, max_backoff=30.0
         )
+        backoff = 0.0
         for _ in range(10):
-            b = ladder.next_backoff()
-        assert b <= 30.0
+            backoff = ladder.next_backoff()
+        assert backoff <= 30.0
 
     def test_reset(self):
         ladder = _ReconnectLadder()
         ladder.retries = 5
         ladder.reset()
         assert ladder.retries == 0
-
-
-# --- Liveness tracker ---
 
 
 class TestLivenessTracker:
@@ -169,31 +153,50 @@ class TestLivenessTracker:
     def test_idle_seconds(self):
         tracker = _LivenessTracker()
         tracker.last_activity = time.monotonic() - 50
-        assert tracker.idle_seconds >= 49
-        assert tracker.idle_seconds < 52
-
-
-# --- PollingRecoveryManager integration ---
+        assert 49 <= tracker.idle_seconds < 52
 
 
 class TestPollingRecoveryManager:
-    @pytest.mark.asyncio
-    async def test_on_post_init_registers_handler(self):
-        manager = PollingRecoveryManager()
+    def _app(self):
         app = MagicMock()
         app.add_error_handler = MagicMock()
+        app.updater.running = True
+        app.updater.stop = AsyncMock()
+        return app
+
+    @pytest.mark.asyncio
+    async def test_start_registers_handler_and_watchdog(self):
+        manager = PollingRecoveryManager()
+        app = self._app()
+        start_polling = AsyncMock()
+
+        await manager.start(app, start_polling=start_polling)
+
+        app.add_error_handler.assert_called_once_with(
+            manager.handle_application_error
+        )
+        assert manager._app is app
+        assert manager._start_polling is start_polling
+        assert manager._watchdog_task is not None
+
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_on_post_init_compatibility_starts_manager(self):
+        manager = PollingRecoveryManager()
+        app = self._app()
 
         await manager.on_post_init(app)
 
-        app.add_error_handler.assert_called_once_with(manager._error_handler)
-        assert manager._app is app
+        app.add_error_handler.assert_called_once_with(
+            manager.handle_application_error
+        )
+        await manager.shutdown()
 
     @pytest.mark.asyncio
     async def test_shutdown_cancels_watchdog(self):
         manager = PollingRecoveryManager()
-        app = MagicMock()
-        app.add_error_handler = MagicMock()
-        await manager.on_post_init(app)
+        await manager.start(self._app())
 
         assert manager._watchdog_task is not None
         assert not manager._watchdog_task.done()
@@ -204,69 +207,106 @@ class TestPollingRecoveryManager:
     @pytest.mark.asyncio
     async def test_shutdown_safe_when_no_watchdog(self):
         manager = PollingRecoveryManager()
-        await manager.shutdown()  # should not raise
+        await manager.shutdown()
 
     @pytest.mark.asyncio
-    async def test_error_handler_schedules_reconnect_on_connect_timeout(self):
+    async def test_application_error_schedules_reconnect_on_connect_timeout(self):
         manager = PollingRecoveryManager()
+        await manager.start(self._app(), start_polling=AsyncMock())
 
         class ConnectTimeout(Exception):
             pass
 
-        exc = ConnectTimeout("timed out")
         context = MagicMock()
-        context.error = exc
+        context.error = ConnectTimeout("timed out")
 
-        with patch("src.bot.polling_recovery.asyncio.create_task") as mock_task:
-            await manager._error_handler(None, context)
-            mock_task.assert_called_once()
+        manager._reconnect = AsyncMock()
+        await manager.handle_application_error(None, context)
+
+        assert manager._reconnect_task is not None
+        await manager._reconnect_task
+        manager._reconnect.assert_awaited_once()
+        await manager.shutdown()
 
     @pytest.mark.asyncio
-    async def test_error_handler_schedules_reconnect_on_network_error(self):
+    async def test_transport_error_schedules_reconnect_on_network_error(self):
         manager = PollingRecoveryManager()
-        exc = TimedOut()
-        context = MagicMock()
-        context.error = exc
+        await manager.start(self._app(), start_polling=AsyncMock())
 
-        with patch("src.bot.polling_recovery.asyncio.create_task") as mock_task:
-            await manager._error_handler(None, context)
-            mock_task.assert_called_once()
+        manager._reconnect = AsyncMock()
+        manager.handle_transport_error(NetworkError("httpx.ConnectError: "))
+
+        assert manager._reconnect_task is not None
+        await manager._reconnect_task
+        manager._reconnect.assert_awaited_once()
+        await manager.shutdown()
 
     @pytest.mark.asyncio
-    async def test_error_handler_ignores_polling_conflict(self):
+    async def test_non_recoverable_error_is_ignored(self):
         manager = PollingRecoveryManager()
-        exc = Exception("Conflict: terminated by other getUpdates")
-        context = MagicMock()
-        context.error = exc
+        await manager.start(self._app(), start_polling=AsyncMock())
 
-        with patch("src.bot.polling_recovery.asyncio.create_task") as mock_task:
-            await manager._error_handler(None, context)
-            mock_task.assert_not_called()
+        manager.handle_transport_error(ValueError("something unrelated"))
+
+        assert manager._reconnect_task is None
+        await manager.shutdown()
 
     @pytest.mark.asyncio
-    async def test_error_handler_ignores_fatal_error(self):
+    async def test_reconnect_uses_start_polling_callback(self, monkeypatch):
         manager = PollingRecoveryManager()
-        exc = ValueError("something unrelated")
-        context = MagicMock()
-        context.error = exc
+        app = self._app()
+        start_polling = AsyncMock()
+        await manager.start(app, start_polling=start_polling)
+        monkeypatch.setattr(
+            "src.bot.polling_recovery.asyncio.sleep", AsyncMock()
+        )
+        monkeypatch.setattr(
+            "src.bot.polling_recovery._drain_httpx_pool", AsyncMock()
+        )
 
-        with patch("src.bot.polling_recovery.asyncio.create_task") as mock_task:
-            await manager._error_handler(None, context)
-            mock_task.assert_not_called()
+        await manager._reconnect("NetworkError")
+
+        app.updater.stop.assert_awaited()
+        start_polling.assert_awaited_once_with(drop_pending_updates=True)
+        await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_reconnect_retries_start_polling_failure(self, monkeypatch):
+        manager = PollingRecoveryManager()
+        app = self._app()
+        start_polling = AsyncMock(side_effect=[NetworkError("temporary"), None])
+        await manager.start(app, start_polling=start_polling)
+        monkeypatch.setattr(
+            "src.bot.polling_recovery.asyncio.sleep", AsyncMock()
+        )
+        monkeypatch.setattr(
+            "src.bot.polling_recovery._drain_httpx_pool", AsyncMock()
+        )
+
+        await manager._reconnect("NetworkError")
+
+        assert start_polling.await_count == 2
+        await manager.shutdown()
 
     @pytest.mark.asyncio
     async def test_reconnect_guard_prevents_concurrent(self):
         manager = PollingRecoveryManager()
         manager._reconnecting = True
-        # Should return immediately, not attempt reconnect
-        await manager._reconnect("test")
-        # No assertion needed — just verify it doesn't error
+
+        await manager._reconnect("NetworkError")
 
     @pytest.mark.asyncio
-    async def test_reconnect_exhausted_exits(self):
+    async def test_watchdog_restarts_dead_polling_task(self):
         manager = PollingRecoveryManager()
-        manager._ladder.retries = 10  # exhausted
+        app = self._app()
+        app.updater._polling_task = MagicMock()
+        app.updater._polling_task.done.return_value = True
+        await manager.start(app, start_polling=AsyncMock())
 
-        with patch("os._exit") as mock_exit:
-            await manager._reconnect("test")
-            mock_exit.assert_called_once_with(1)
+        manager._reconnect = AsyncMock()
+        await manager._check_liveness()
+
+        assert manager._reconnect_task is not None
+        await manager._reconnect_task
+        manager._reconnect.assert_awaited_once()
+        await manager.shutdown()

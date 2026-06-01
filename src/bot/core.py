@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Optional
 
 import structlog
 from telegram import BotCommandScopeAllPrivateChats, Update
-from telegram.error import NetworkError, RetryAfter
+from telegram.error import NetworkError
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -43,7 +43,6 @@ class ClaudeCodeBot:
         self.feature_registry: Optional[FeatureRegistry] = None
         self.orchestrator = MessageOrchestrator(settings, dependencies)
         self.recovery = PollingRecoveryManager()
-        self._polling_reconnect_task: Optional[asyncio.Task] = None
 
     async def initialize(self) -> None:
         """Initialize bot application. Idempotent — safe to call multiple times."""
@@ -80,9 +79,6 @@ class ClaudeCodeBot:
             builder.proxy(proxy_url)
             logger.info("Proxy configured", proxy=proxy_url)
 
-        # Polling recovery: error classification + reconnect ladder + watchdog
-        builder.post_init(self.recovery.on_post_init)
-
         self.app = builder.build()
 
         # Initialize feature registry
@@ -98,6 +94,7 @@ class ClaudeCodeBot:
         # Initialize the underlying Telegram Application so the bot's
         # HTTP client is ready before we make API calls.
         await self.app.initialize()
+        await self.recovery.start(self.app, start_polling=self._start_polling)
 
         # Set bot commands for menu (requires initialized HTTP client)
         await self._set_bot_commands()
@@ -264,97 +261,8 @@ class ClaudeCodeBot:
             timeout=2,
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=drop_pending_updates,
-            error_callback=self._polling_error_callback,
+            error_callback=self.recovery.handle_transport_error,
         )
-
-    def _polling_error_callback(self, exc: BaseException) -> None:
-        """Schedule polling recovery for errors PTB logs outside handlers."""
-
-        error_text = str(exc)
-        logger.warning(
-            "Polling transport error",
-            error=error_text,
-            error_type=type(exc).__name__,
-        )
-
-        # RetryAfter from Telegram rate limit — always recoverable, pass
-        # the exception so _recover_polling can respect the wait time
-        if isinstance(exc, RetryAfter):
-            if self._polling_reconnect_task and not self._polling_reconnect_task.done():
-                return
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                logger.warning("Cannot recover polling: no running event loop")
-                return
-            self._polling_reconnect_task = loop.create_task(
-                self._recover_polling("RetryAfter", exc)
-            )
-            return
-
-        lowered = error_text.lower()
-        recoverable = (
-            "conflict" in lowered
-            or "terminated by other getupdates" in lowered
-            or "remoteprotocolerror" in lowered
-            or "server disconnected without sending a response" in lowered
-        )
-        if not recoverable:
-            return
-
-        if self._polling_reconnect_task and not self._polling_reconnect_task.done():
-            return
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("Cannot recover polling: no running event loop")
-            return
-
-        self._polling_reconnect_task = loop.create_task(
-            self._recover_polling(type(exc).__name__)
-        )
-
-    async def _recover_polling(
-        self, reason: str, exc: BaseException | None = None
-    ) -> None:
-        """Stop and restart polling after Telegram transport gets wedged."""
-
-        # For RetryAfter: respect Telegram's requested wait time + buffer
-        if reason == "RetryAfter" and isinstance(exc, RetryAfter):
-            wait_seconds = int(exc.retry_after) + 2
-            logger.warning(
-                "Telegram rate limit — waiting before recovery",
-                retry_after_s=exc.retry_after,
-                total_wait_s=wait_seconds,
-            )
-        elif reason == "Conflict":
-            # Short wait: the other instance should have been killed by now
-            wait_seconds = 6
-        else:
-            wait_seconds = 3
-
-        await asyncio.sleep(wait_seconds)
-        if not self.is_running or not self.app or not self.app.updater:
-            return
-
-        logger.warning("Recovering Telegram polling", reason=reason)
-        try:
-            if self.app.updater.running:
-                await self.app.updater.stop()
-        except Exception as exc:
-            logger.warning("Failed to stop polling during recovery", error=str(exc))
-
-        await asyncio.sleep(3 if reason == "Conflict" else 2)
-
-        if not self.is_running or not self.app or not self.app.updater:
-            return
-
-        try:
-            await self._start_polling(drop_pending_updates=True)
-            logger.info("Telegram polling recovered", reason=reason)
-        except Exception as exc:
-            logger.error("Failed to recover Telegram polling", error=str(exc))
 
     async def stop(self) -> None:
         """Gracefully stop the bot."""
