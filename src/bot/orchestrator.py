@@ -1715,16 +1715,33 @@ class MessageOrchestrator:
                 tid_short = waiting["tid_short"]
                 auq_meta = getattr(self, "_auq_messages", {}).get(tid_short)
                 if auq_meta:
+                    q_text = auq_meta["question_text"]
+                    hdr = auq_meta.get("header", "")
+                    hdr_line = (
+                        f"<b>{escape_html(hdr)}</b>\n" if hdr else ""
+                    )
+                    opts = auq_meta.get("options", [])
+                    lines = [
+                        f"🤔 {hdr_line}<b>Claude 想问你：</b>\n"
+                        f"{escape_html(q_text)}\n"
+                    ]
+                    for i, opt in enumerate(opts[:4]):
+                        lbl = opt.get("label", f"选项 {i + 1}")
+                        desc = opt.get("description", "")
+                        entry = f"☐ {escape_html(lbl)}"
+                        if desc:
+                            entry += f"\n  {escape_html(desc)}"
+                        lines.append(entry)
+                    lines.append(
+                        f"\n📝 <b>自由输入：{escape_html(message_text)}</b>"
+                    )
                     try:
                         await auq_meta["msg"].edit_text(
-                            f"✅ 你输入了：{escape_html(message_text)}",
+                            "\n".join(lines),
                             parse_mode="HTML",
                         )
                     except Exception:
                         pass
-                await update.message.reply_text(
-                    "✅ 已收到你的回答，Claude 继续处理中..."
-                )
             return
 
         # Check if user is providing plan feedback from ExitPlanMode
@@ -2798,13 +2815,9 @@ class MessageOrchestrator:
                 return {
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": (
-                            f"User selected: {answer_str} (via Telegram)"
-                        ),
+                        "permissionDecision": "allow",
                         "additionalContext": (
-                            f"The user was asked '{question_text}' "
-                            f"and chose: {', '.join(selected)}"
+                            f"User answered via Telegram: {answer_str}"
                         ),
                     }
                 }
@@ -3285,6 +3298,11 @@ class MessageOrchestrator:
 
         _, tid_short, action = parts
 
+        # Noop callback (result display buttons) — ignore
+        if action == "noop":
+            await query.answer()
+            return
+
         # Look up stored metadata
         auq_meta = getattr(self, "_auq_messages", {}).get(tid_short)
         if not auq_meta:
@@ -3318,11 +3336,27 @@ class MessageOrchestrator:
             from .update_processor import StopAwareUpdateProcessor
 
             StopAwareUpdateProcessor.auq_other_waiting.add(query.from_user.id)
-            # Edit message to prompt for text input
+            # Edit message: keep question, show options, add free-text prompt
+            q_text = auq_meta["question_text"]
+            hdr = auq_meta.get("header", "")
+            hdr_line = f"<b>{escape_html(hdr)}</b>\n" if hdr else ""
+            lines = [
+                f"🤔 {hdr_line}<b>Claude 想问你：</b>\n"
+                f"{escape_html(q_text)}\n"
+            ]
+            for i, opt in enumerate(options[:4]):
+                lbl = opt.get("label", f"选项 {i + 1}")
+                desc = opt.get("description", "")
+                entry = f"☐ {escape_html(lbl)}"
+                if desc:
+                    entry += f"\n  {escape_html(desc)}"
+                lines.append(entry)
+            lines.append("\n📝 <b>请输入你的回答（直接发送文字即可）：</b>")
             try:
                 await query.edit_message_text(
-                    "📝 请输入你的回答（直接发送文字即可）：",
+                    "\n".join(lines),
                     parse_mode="HTML",
+                    reply_markup=None,
                 )
             except Exception:
                 pass
@@ -3346,12 +3380,29 @@ class MessageOrchestrator:
                 # Resolve future
                 future.set_result({"selected": selected})
 
-                # Edit message
-                answer_str = ", ".join(selected)
+                # Edit message: keep question, add answer line + selected buttons
+                question_text = auq_meta["question_text"]
+                header = auq_meta.get("header", "")
+                header_line = f"<b>{escape_html(header)}</b>\n" if header else ""
+                # Build option list with checkmarks inline
+                lines = [
+                    f"🤔 {header_line}<b>Claude 想问你：</b>\n"
+                    f"{escape_html(question_text)}\n"
+                ]
+                for i, opt in enumerate(options[:4]):
+                    label = opt.get("label", f"选项 {i + 1}")
+                    desc = opt.get("description", "")
+                    mark = "✅" if label in selected else "☐"
+                    entry = f"{mark} {escape_html(label)}"
+                    if desc:
+                        entry += f"\n  {escape_html(desc)}"
+                    lines.append(entry)
+                new_text = "\n".join(lines)
                 try:
                     await query.edit_message_text(
-                        f"✅ 你选择了：{answer_str}",
+                        new_text,
                         parse_mode="HTML",
+                        reply_markup=None,
                     )
                 except Exception:
                     pass
@@ -3375,7 +3426,7 @@ class MessageOrchestrator:
                 row: List[InlineKeyboardButton] = []
                 for i, opt in enumerate(options[:4]):
                     label = opt.get("label", f"选项 {i + 1}")
-                    checked = "☑" if i < len(states) and states[i] else "☐"
+                    checked = "✅" if i < len(states) and states[i] else "☐"
                     row.append(
                         InlineKeyboardButton(
                             f"{checked} {label}",
@@ -3409,13 +3460,39 @@ class MessageOrchestrator:
                 return
 
             selected_label = options[idx].get("label", f"选项 {idx + 1}")
+            logger.info(
+                "AUQ single-select: resolving future",
+                tool_use_id=tool_use_id,
+                selected=selected_label,
+                future_done=future.done(),
+            )
             future.set_result({"selected": [selected_label]})
+            logger.info(
+                "AUQ single-select: future resolved",
+                future_done=future.done(),
+            )
 
-            # Edit message to show result
+            # Edit message: keep question + show all options with marks
+            q_text = auq_meta["question_text"]
+            hdr = auq_meta.get("header", "")
+            hdr_line = f"<b>{escape_html(hdr)}</b>\n" if hdr else ""
+            lines = [
+                f"🤔 {hdr_line}<b>Claude 想问你：</b>\n"
+                f"{escape_html(q_text)}\n"
+            ]
+            for i, opt in enumerate(options[:4]):
+                lbl = opt.get("label", f"选项 {i + 1}")
+                desc = opt.get("description", "")
+                mark = "✅" if i == idx else "☐"
+                entry = f"{mark} {escape_html(lbl)}"
+                if desc:
+                    entry += f"\n  {escape_html(desc)}"
+                lines.append(entry)
             try:
                 await query.edit_message_text(
-                    f"✅ 你选择了：{selected_label}",
+                    "\n".join(lines),
                     parse_mode="HTML",
+                    reply_markup=None,
                 )
             except Exception:
                 pass
