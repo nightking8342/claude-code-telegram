@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Chinese localization / 中文本地化**：所有面向用户的机器人字符串翻译为中文，包括命令描述、认证消息和重启通知
 
 ### Changed / 变更
+- **`claude_setting_sources` config / 配置项**：新增 `CLAUDE_SETTING_SOURCES` 环境变量，统一控制 SDK 和 skill 发现的文件系统来源（`"user"`, `"project"`, `"local"`），取代 sdk_integration.py 中的硬编码
+- **Skill list respects setting_sources / skill 列表跟随配置**：`/skill` 命令展示的 skill 列表现在根据 `setting_sources` 过滤，排除当前不可用的技能
+- **Project-level skill discovery / 项目级 skill 发现**：`/skill` 命令新增项目级 `.claude/skills/` 和 `.claude/commands/` 扫描，从工作目录向上遍历到 git root
 - **HTTP health diagnostics / 健康检查诊断**：`/health` 暴露 Telegram polling 与 recovery 状态，便于识别进程存活但 polling 假死的情况
 - **Codex guidance localization / Codex 指南中文化**：`AGENTS.md` 翻译为中文，并将 changelog 维护规则路由到 `.claude/rules/changelog.md`
 - **Plan mode bridged to Telegram / Plan 模式桥接**：内置 `EnterPlanMode`/`ExitPlanMode` hook 通过 PreToolUse 接入 —— `/plan` 命令、批准/拒绝/反馈按钮、计划内容展示
