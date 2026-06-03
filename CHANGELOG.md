@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added / 新增
+- **`/btw` side question / 侧路提问**：不中断主会话向 Claude 快速提问 —— 隔离的临时运行，`max_turns=1`，独立配置目录，不持久化
+- **`/repo` recursive browsing / 递归浏览**：递归浏览和下载仓库文件，支持目录树导航
+- **`/model` command / 模型命令**：查看和切换活跃模型
+- **Provider profiles / 提供方配置**：`/provider` 命令查看和管理模型提供方配置；提供方设置覆盖层以 flag 层传入 SDK
+- **`/sessions` browser / 会话浏览器**：完整的会话管理 UI —— 分页列表、详情视图、恢复、导出（MD/JSON），跨用户隔离；集成 SQLite 和 CLI 本地 JSONL 存储
+- **AskUserQuestion → Telegram buttons / 按钮**：Claude 的 `AskUserQuestion` 工具调用通过 PreToolUse hook 拦截，渲染为 Telegram 内联键盘；支持自由文本"Other"输入
+- **Chinese localization / 中文本地化**：所有面向用户的机器人字符串翻译为中文，包括命令描述、认证消息和重启通知
+
+### Changed / 变更
+- **HTTP health diagnostics / 健康检查诊断**：`/health` 暴露 Telegram polling 与 recovery 状态，便于识别进程存活但 polling 假死的情况
+- **Codex guidance localization / Codex 指南中文化**：`AGENTS.md` 翻译为中文，并将 changelog 维护规则路由到 `.claude/rules/changelog.md`
+- **Plan mode bridged to Telegram / Plan 模式桥接**：内置 `EnterPlanMode`/`ExitPlanMode` hook 通过 PreToolUse 接入 —— `/plan` 命令、批准/拒绝/反馈按钮、计划内容展示
+- **Session export redesigned / 会话导出重做**：HTML 导出重写为聊天气泡样式的对话记录视图
+- **Polling resilience / 轮询韧性**：错误分类、重连阶梯（指数退避）、长连接活跃度看门狗
+- **Session resume notifications / 会话恢复通知**：自动恢复会话时，用户可见消息数和会话时长提示
+- **30-min safety timeout / 30 分钟安全超时**：防止 `CLAUDE_TIMEOUT_SECONDS` 未设置时 Claude 会话无限运行
+- **CI: pre-commit hooks**：提交时自动 lint（`.pre-commit-config.yaml`），lint 拆分为独立 CI job
+- **`claude-agent-sdk` upgraded / 升级**到 ^0.2.87
+- **CLAUDE.md loading / 加载方式**：移除手动拼接进 `system_prompt` 的逻辑；完全委托给 CLI 的 `setting_sources=["user", "project"]` 向上目录遍历机制
+- **CLAUDE.md rewritten / 重写**：按 Claude Code `/init` 规范从 ~145 行精简到 ~60 行 —— 移除可发现的目录列表、冗长的配置枚举和重复细节
+
+### Fixed / 修复
+- **Polling recovery exhaustion / 轮询恢复耗尽**：快速重试失败后进入 30 秒慢速探测，代理或网络恢复后无需重启即可重新启动 polling
+- **Polling RetryAfter / 轮询 RetryAfter**：Telegram `429 Too Many Requests` 带 `RetryAfter` 时正确等待而非崩溃
+- **Polling conflict / 轮询冲突恢复**：改进其他 bot 实例 `getUpdates` 冲突的处理
+- **AUQ result display / AskUserQuestion 结果展示**：改进 AUQ 结果渲染；修复对勾颜色
+- **Session export crash / 会话导出崩溃**：Agentic 模式下 `SessionModel`/`MessageModel` 转换错误
+- **`/sessions` crash loop / 崩溃循环**：错误的 storage 类继承、缺失的 audit logger 方法、agentic 模式下回调处理器未注册
+- **Hook signature / Hook 签名不匹配**：更新 hook 函数签名以匹配 SDK `HookMatcher` 期望
+- **AUQ callback blocking / 回调阻塞**：AskUserQuestion 回调和"Other"文本回复绕过顺序更新锁，主任务运行期间仍可响应
+- **Session resume hint / 会话恢复提示**：显示消息数而非内部轮次数
+- **Windows compatibility / Windows 兼容性**：各种路径和编码修复
+
 ## [1.6.0] - 2026-03-30
 
 ### Added

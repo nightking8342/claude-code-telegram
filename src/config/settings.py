@@ -100,6 +100,15 @@ class Settings(BaseSettings):
         DEFAULT_CLAUDE_MAX_COST_PER_REQUEST,
         description="Max cost per individual request (SDK budget cap)",
     )
+    claude_setting_sources: List[str] = Field(
+        default=["user", "project"],
+        description=(
+            "Filesystem sources for CLI to load: "
+            "'user' (~/.claude), 'project' (.claude/ up to git root), "
+            "'local' (.claude/settings.local.json). "
+            "Controls CLAUDE.md, rules, skills, and settings discovery."
+        ),
+    )
     # NOTE: When changing this list, also update docs/tools.md,
     # docs/configuration.md, .env.example,
     # src/claude/facade.py (_get_admin_instructions),

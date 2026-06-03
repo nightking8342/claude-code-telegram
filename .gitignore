@@ -150,3 +150,6 @@ config/mcp.json
 
 # Local inspection / scratch venvs
 _temp_inspect/
+
+code-source/
+

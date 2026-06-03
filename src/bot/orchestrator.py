@@ -1225,7 +1225,13 @@ class MessageOrchestrator:
             # No argument — list all discovered skills
             from src.claude.skills import discover_skills
 
-            skills = discover_skills()
+            working_dir = context.user_data.get(
+                "current_directory", self.settings.approved_directory
+            )
+            skills = discover_skills(
+                working_directory=Path(working_dir) if working_dir else None,
+                setting_sources=self.settings.claude_setting_sources,
+            )
             if not skills:
                 await update.message.reply_text(
                     "未发现已安装的 Skills。\n\n"

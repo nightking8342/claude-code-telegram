@@ -1129,8 +1129,14 @@ class TestClaudeMdLoading:
     def sdk_manager(self, config):
         return ClaudeSDKManager(config)
 
-    async def test_claude_md_appended_to_system_prompt(self, sdk_manager, tmp_path):
-        """CLAUDE.md content is appended to system prompt when present."""
+    async def test_claude_md_not_manually_loaded_into_system_prompt(
+        self, sdk_manager, tmp_path
+    ):
+        """CLAUDE.md is NOT manually loaded into system_prompt.
+
+        CLAUDE.md discovery is delegated to the CLI via setting_sources,
+        which performs upward directory traversal automatically.
+        """
         claude_md = tmp_path / "CLAUDE.md"
         claude_md.write_text("# Project Rules\nAlways use type hints.")
 
@@ -1147,8 +1153,9 @@ class TestClaudeMdLoading:
             await sdk_manager.execute_command(prompt="test", working_directory=tmp_path)
 
         opts = captured[0]
-        assert "# Project Rules" in opts.system_prompt
-        assert "Always use type hints." in opts.system_prompt
+        assert "# Project Rules" not in opts.system_prompt
+        assert "Always use type hints." not in opts.system_prompt
+        assert "Use relative paths." in opts.system_prompt
 
     async def test_system_prompt_unchanged_without_claude_md(
         self, sdk_manager, tmp_path
@@ -1459,8 +1466,13 @@ class TestExecuteBtw:
 
         assert response.content == "Extracted answer"
 
-    async def test_execute_btw_loads_claude_md(self, sdk_manager, tmp_path):
-        """execute_btw should load CLAUDE.md into system_prompt."""
+    async def test_execute_btw_does_not_manually_load_claude_md(
+        self, sdk_manager, tmp_path
+    ):
+        """execute_btw should NOT manually load CLAUDE.md into system_prompt.
+
+        CLAUDE.md discovery is delegated to setting_sources.
+        """
         claude_md = tmp_path / "CLAUDE.md"
         claude_md.write_text("# BTW Rules\nBe concise.")
 
@@ -1480,8 +1492,9 @@ class TestExecuteBtw:
             )
 
         assert len(captured_options) == 1
-        assert "# BTW Rules" in captured_options[0].system_prompt
-        assert "Be concise." in captured_options[0].system_prompt
+        assert "# BTW Rules" not in captured_options[0].system_prompt
+        assert "Be concise." not in captured_options[0].system_prompt
+        assert "Use relative paths." in captured_options[0].system_prompt
 
     async def test_execute_btw_no_mcp_servers(self, sdk_manager):
         """execute_btw should NOT configure MCP servers."""

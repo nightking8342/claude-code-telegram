@@ -289,6 +289,55 @@ class TestPollingRecoveryManager:
         await manager.shutdown()
 
     @pytest.mark.asyncio
+    async def test_reconnect_slow_retries_after_exhaustion(self, monkeypatch):
+        manager = PollingRecoveryManager()
+        manager._ladder.max_retries = 2
+        app = self._app()
+        start_polling = AsyncMock(
+            side_effect=[
+                NetworkError("still down"),
+                NetworkError("still down"),
+                None,
+            ]
+        )
+        await manager.start(app, start_polling=start_polling)
+        sleep = AsyncMock()
+        monkeypatch.setattr("src.bot.polling_recovery.asyncio.sleep", sleep)
+        monkeypatch.setattr(
+            "src.bot.polling_recovery._drain_httpx_pool", AsyncMock()
+        )
+
+        await manager._reconnect("NetworkError")
+
+        assert start_polling.await_count == 3
+        assert manager._ladder.retries == 0
+        assert manager._slow_retrying is False
+        assert manager._slow_retry_count == 0
+        assert sleep.await_count >= 3
+        await manager.shutdown()
+
+    def test_status_reports_recovery_snapshot(self):
+        manager = PollingRecoveryManager()
+        app = self._app()
+        app.updater.running = False
+        app.updater._polling_task = MagicMock()
+        app.updater._polling_task.done.return_value = True
+        manager._app = app
+        manager._ladder.retries = manager._ladder.max_retries
+        manager._slow_retrying = True
+        manager._slow_retry_count = 4
+        manager._last_reason = "NetworkError"
+
+        status = manager.get_status()
+
+        assert status["polling_running"] is False
+        assert status["polling_task_done"] is True
+        assert status["recovery_state"] == "slow_retrying"
+        assert status["exhausted"] is True
+        assert status["slow_retry_count"] == 4
+        assert status["last_reason"] == "NetworkError"
+
+    @pytest.mark.asyncio
     async def test_reconnect_guard_prevents_concurrent(self):
         manager = PollingRecoveryManager()
         manager._reconnecting = True

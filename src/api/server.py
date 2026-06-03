@@ -5,6 +5,8 @@ Receives external webhooks and publishes them as events on the bus.
 """
 
 import uuid
+from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from typing import Any, Dict, Optional
 
 import structlog
@@ -18,11 +20,14 @@ from .auth import verify_github_signature, verify_shared_secret
 
 logger = structlog.get_logger()
 
+HealthProvider = Callable[[], Dict[str, Any] | Awaitable[Dict[str, Any]]]
+
 
 def create_api_app(
     event_bus: EventBus,
     settings: Settings,
     db_manager: Optional[DatabaseManager] = None,
+    health_provider: Optional[HealthProvider] = None,
 ) -> FastAPI:
     """Create the FastAPI application."""
 
@@ -34,8 +39,14 @@ def create_api_app(
     )
 
     @app.get("/health")
-    async def health_check() -> Dict[str, str]:
-        return {"status": "ok"}
+    async def health_check() -> Dict[str, Any]:
+        if health_provider is None:
+            return {"status": "ok"}
+
+        health = health_provider()
+        if isawaitable(health):
+            health = await health
+        return dict(health)
 
     @app.post("/webhooks/{provider}")
     async def receive_webhook(
@@ -176,11 +187,12 @@ async def run_api_server(
     event_bus: EventBus,
     settings: Settings,
     db_manager: Optional[DatabaseManager] = None,
+    health_provider: Optional[HealthProvider] = None,
 ) -> None:
     """Run the FastAPI server using uvicorn."""
     import uvicorn
 
-    app = create_api_app(event_bus, settings, db_manager)
+    app = create_api_app(event_bus, settings, db_manager, health_provider)
 
     config = uvicorn.Config(
         app=app,

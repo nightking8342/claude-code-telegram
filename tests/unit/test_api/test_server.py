@@ -36,6 +36,26 @@ class TestWebhookAPI:
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
 
+    def test_health_check_uses_provider(self) -> None:
+        bus = EventBus()
+        app = create_api_app(
+            bus,
+            make_settings(),
+            health_provider=lambda: {
+                "status": "degraded",
+                "telegram_transport": "polling_stopped",
+                "recovery": {"recovery_state": "slow_retrying"},
+            },
+        )
+        client = TestClient(app)
+
+        response = client.get("/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["telegram_transport"] == "polling_stopped"
+        assert data["recovery"]["recovery_state"] == "slow_retrying"
+
     def test_github_webhook_valid_signature(self) -> None:
         """Valid GitHub webhook is accepted and event published."""
         bus = EventBus()

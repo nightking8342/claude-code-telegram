@@ -379,6 +379,37 @@ class ClaudeCodeBot:
             logger.error("Failed to get bot info", error=str(e))
             return {"status": "error", "error": str(e)}
 
+    def get_health_status(self) -> Dict[str, Any]:
+        """Return local health without making network calls."""
+        recovery = self.recovery.get_status() if self.recovery else {}
+
+        if self.settings.webhook_url:
+            telegram_transport = "webhook"
+            transport_ok = self.is_running and self.app is not None
+        else:
+            polling_running = bool(recovery.get("polling_running"))
+            telegram_transport = (
+                "polling_running" if polling_running else "polling_stopped"
+            )
+            transport_ok = polling_running
+
+        if not self.app:
+            status = "not_initialized"
+        elif self.is_running and transport_ok:
+            status = "ok"
+        elif self.is_running:
+            status = "degraded"
+        else:
+            status = "stopped"
+
+        return {
+            "status": status,
+            "process": "running" if self.is_running else "stopped",
+            "telegram_transport": telegram_transport,
+            "drop_pending_updates": True,
+            "recovery": recovery,
+        }
+
     async def health_check(self) -> bool:
         """Perform health check."""
         try:

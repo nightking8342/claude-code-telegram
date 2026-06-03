@@ -1,144 +1,72 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本文件为 Claude Code (claude.ai/code) 在本仓库中工作时提供指导。
 
-## Project Overview
+## 项目概述
 
-Telegram bot providing remote access to Claude Code. Python 3.10+, built with Poetry, using `python-telegram-bot` for Telegram and `claude-agent-sdk` for Claude Code integration.
+Telegram 机器人，提供对 Claude Code 的远程访问。Python 3.10+，Poetry 构建，`python-telegram-bot` + `claude-agent-sdk`。
 
-## Commands
+## 常用命令
 
 ```bash
-make dev              # Install all deps (including dev)
-make install          # Production deps only
-make run              # Run the bot
-make run-watch        # Run with auto-restart on src/ changes (watchfiles)
-make run-debug        # Run with debug logging
-make test             # Run tests with coverage
+make dev              # 全部依赖（含开发），之后 pre-commit install
+make test             # 测试 + 覆盖率
 make lint             # Black + isort + flake8 + mypy
-make format           # Auto-format with black + isort
-
-# Run a single test
+make format           # 自动格式化
+make run-watch        # 监听 src/ 自动重启
+# 单个测试
 poetry run pytest tests/unit/test_config.py -k test_name -v
-
-# Type checking only
-poetry run mypy src
-
-# Release: bump version, commit, tag, then push tag to trigger release workflow
-make bump-patch       # or bump-minor / bump-major
-make release
+# 发布
+make bump-patch && make release
 ```
 
-Pre-commit hooks run lint on commit (see `.pre-commit-config.yaml`); install with `pre-commit install` after `make dev`.
+## 目录说明
 
-## Architecture
+- `src/` 是本项目的 Python 源码
+- `code-source/` 是上游 Claude Code CLI 的 TypeScript 源码快照，仅在需要查阅 CLI 实现细节时访问，不要在常规任务中浏览
+- `tests/` 是本项目的测试代码
 
-### Claude SDK Integration
+## 架构要点（Claude 不读代码容易搞错的部分）
 
-`ClaudeIntegration` (facade in `src/claude/facade.py`) wraps `ClaudeSDKManager` (`src/claude/sdk_integration.py`), which uses `claude-agent-sdk` with `ClaudeSDKClient` for async streaming. Session IDs come from Claude's `ResultMessage`, not generated locally.
+### Claude SDK 集成
 
-Sessions auto-resume: per user+directory, persisted in SQLite.
+`ClaudeIntegration`（`src/claude/facade.py`）是门面类，包装 `ClaudeSDKManager`（`src/claude/sdk_integration.py`）。**不要**直接实例化 SDK 客户端。Session ID 来自 Claude 的 `ResultMessage`，不由本地生成。会话按用户+目录维度自动恢复（SQLite 持久化）。
 
-### Request Flow
+### 中间件顺序
 
-**Agentic mode** (default, `AGENTIC_MODE=true`):
+Agentic 模式（默认）请求链：安全校验（group -3）-> 认证（group -2）-> 限流（group -1）-> MessageOrchestrator（group 10）。经典模式（`AGENTIC_MODE=false`）同样的链，路由到 `src/bot/handlers/`。
 
-```
-Telegram message -> Security middleware (group -3) -> Auth middleware (group -2)
--> Rate limit (group -1) -> MessageOrchestrator.agentic_text() (group 10)
--> ClaudeIntegration.run_command() -> SDK
--> Response parsed -> Stored in SQLite -> Sent back to Telegram
-```
+### 依赖注入
 
-**External triggers** (webhooks, scheduler):
+处理器通过 `context.bot_data` 访问依赖（`auth_manager`、`claude_integration`、`storage`、`security_validator`）。
 
-```
-Webhook POST /webhooks/{provider} -> Signature verification -> Deduplication
--> Publish WebhookEvent to EventBus -> AgentHandler.handle_webhook()
--> ClaudeIntegration.run_command() -> Publish AgentResponseEvent
--> NotificationService -> Rate-limited Telegram delivery
-```
+### 安全规则
 
-**Classic mode** (`AGENTIC_MODE=false`): Same middleware chain, but routes through full command/message handlers in `src/bot/handlers/` with 13 commands and inline keyboards.
+所有文件操作必须限制在 `APPROVED_DIRECTORY` 内。`SecurityValidator` 拦截 `.env`、`.ssh`、`id_rsa`、`.pem` 访问及 `..`、`;`、`&&`、`$()` 等危险模式。`ToolMonitor` 校验工具调用的白名单和文件路径边界。
 
-### Dependency Injection
+### 配置与功能开关
 
-Bot handlers access dependencies via `context.bot_data`:
-```python
-context.bot_data["auth_manager"]
-context.bot_data["claude_integration"]
-context.bot_data["storage"]
-context.bot_data["security_validator"]
-```
+环境变量配置见 `@.env.example`，功能开关见 `@src/config/features.py`，项目 topic 配置见 `@config/projects.example.yaml`。
 
-### Key Directories
+## 代码风格（与语言默认不同的部分）
 
-- `src/config/` -- Pydantic Settings v2 config with env detection, feature flags (`features.py`), YAML project loader (`loader.py`)
-- `src/bot/handlers/` -- Telegram command, message, and callback handlers (classic mode + project thread commands)
-- `src/bot/middleware/` -- Auth, rate limit, security input validation
-- `src/bot/features/` -- Git integration, file handling, quick actions, session export
-- `src/bot/orchestrator.py` -- MessageOrchestrator: routes to agentic or classic handlers, project-topic routing
-- `src/claude/` -- Claude integration facade, SDK/CLI managers, session management, tool monitoring
-- `src/projects/` -- Multi-project support: `registry.py` (YAML project config), `thread_manager.py` (Telegram topic sync/routing)
-- `src/storage/` -- SQLite via aiosqlite, repository pattern (users, sessions, messages, tool_usage, audit_log, cost_tracking, project_threads)
-- `src/security/` -- Multi-provider auth (whitelist + token), input validators (with optional `disable_security_patterns`), rate limiter, audit logging
-- `src/events/` -- EventBus (async pub/sub), event types, AgentHandler, EventSecurityMiddleware
-- `src/api/` -- FastAPI webhook server, GitHub HMAC-SHA256 + Bearer token auth
-- `src/scheduler/` -- APScheduler cron jobs, persistent storage in SQLite
-- `src/notifications/` -- NotificationService, rate-limited Telegram delivery
+- Black **88 字符**行宽（非默认 79），isort（black profile），flake8，mypy strict
+- structlog 统一日志（生产 JSON，开发 console）
+- 所有函数必须有类型注解（`disallow_untyped_defs = true`）
+- `datetime.now(UTC)` — 不要用 `datetime.utcnow()`（已弃用）
+- SQLite 适配器通过 `PARSE_DECLTYPES` 自动转换时间列，`from_row()` 必须用 `isinstance(val, str)` 守卫 `fromisoformat()`
+- pytest-asyncio，`asyncio_mode = "auto"`
 
-### Security Model
+## 文档维护
 
-5-layer defense: authentication (whitelist/token) -> directory isolation (APPROVED_DIRECTORY + path traversal prevention) -> input validation (blocks `..`, `;`, `&&`, `$()`, etc.) -> rate limiting (token bucket) -> audit logging.
+所有用户可见的变更必须记录在 `CHANGELOG.md`，格式规范见 `.claude/rules/changelog.md`。
 
-`SecurityValidator` blocks access to secrets (`.env`, `.ssh`, `id_rsa`, `.pem`) and dangerous shell patterns. Can be relaxed with `DISABLE_SECURITY_PATTERNS=true` (trusted environments only).
+## 添加新的 Bot 命令
 
-`ToolMonitor` validates Claude's tool calls against allowlist/disallowlist, file path boundaries, and dangerous bash patterns. Tool name validation can be bypassed with `DISABLE_TOOL_VALIDATION=true`.
+**Agentic 模式**（`src/bot/orchestrator.py`）：
+1. 添加处理函数
+2. `_register_agentic_handlers()` 注册
+3. `get_bot_commands()` 添加菜单项
+4. 审计日志
 
-Webhook authentication: GitHub HMAC-SHA256 signature verification, generic Bearer token for other providers, atomic deduplication via `webhook_events` table.
-
-### Configuration
-
-Settings loaded from environment variables via Pydantic Settings. Required: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `APPROVED_DIRECTORY`. Key optional: `ALLOWED_USERS` (comma-separated Telegram IDs), `ANTHROPIC_API_KEY`, `ENABLE_MCP`, `MCP_CONFIG_PATH`.
-
-Agentic platform settings: `AGENTIC_MODE` (default true), `ENABLE_API_SERVER`, `API_SERVER_PORT` (default 8080), `GITHUB_WEBHOOK_SECRET`, `WEBHOOK_API_SECRET`, `ENABLE_SCHEDULER`, `NOTIFICATION_CHAT_IDS`.
-
-Security relaxation (trusted environments only): `DISABLE_SECURITY_PATTERNS` (default false), `DISABLE_TOOL_VALIDATION` (default false).
-
-Multi-project topics: `ENABLE_PROJECT_THREADS` (default false), `PROJECT_THREADS_MODE` (`private`|`group`), `PROJECT_THREADS_CHAT_ID` (required for group mode), `PROJECTS_CONFIG_PATH` (path to YAML project registry), `PROJECT_THREADS_SYNC_ACTION_INTERVAL_SECONDS` (default `1.1`, set `0` to disable pacing). See `config/projects.example.yaml`.
-
-Output verbosity: `VERBOSE_LEVEL` (default 1, range 0-2). Controls how much of Claude's background activity is shown to the user in real-time. 0 = quiet (only final response, typing indicator still active), 1 = normal (tool names + reasoning snippets shown during execution), 2 = detailed (tool names with input summaries + longer reasoning text). Users can override per-session via `/verbose 0|1|2`. A persistent typing indicator is refreshed every ~2 seconds at all levels.
-
-Voice transcription: `ENABLE_VOICE_MESSAGES` (default true), `VOICE_PROVIDER` (`mistral`|`openai`|`local`, default `mistral`), `MISTRAL_API_KEY`, `OPENAI_API_KEY`, `VOICE_TRANSCRIPTION_MODEL`. For local provider: `WHISPER_CPP_BINARY_PATH`, `WHISPER_CPP_MODEL_PATH` (requires ffmpeg + whisper.cpp installed). Provider implementation is in `src/bot/features/voice_handler.py`.
-
-Feature flags in `src/config/features.py` control: MCP, git integration, file uploads, quick actions, session export, image uploads, voice messages, conversation mode, agentic mode, API server, scheduler.
-
-### DateTime Convention
-
-All datetimes use timezone-aware UTC: `datetime.now(UTC)` (not `datetime.utcnow()`). SQLite adapters auto-convert TIMESTAMP/DATETIME columns to `datetime` objects via `detect_types=PARSE_DECLTYPES`. Model `from_row()` methods must guard `fromisoformat()` calls with `isinstance(val, str)` checks.
-
-## Code Style
-
-- Black (88 char line length), isort (black profile), flake8, mypy strict, autoflake for unused imports
-- pytest-asyncio with `asyncio_mode = "auto"`
-- structlog for all logging (JSON in prod, console in dev)
-- Type hints required on all functions (`disallow_untyped_defs = true`)
-- Use `datetime.now(UTC)` not `datetime.utcnow()` (deprecated)
-
-## Adding a New Bot Command
-
-### Agentic mode
-
-Agentic mode commands: `/start`, `/new`, `/status`, `/verbose`, `/plan`, `/repo`. If `ENABLE_PROJECT_THREADS=true`: `/sync_threads`. To add a new command:
-
-1. Add handler function in `src/bot/orchestrator.py`
-2. Register in `MessageOrchestrator._register_agentic_handlers()`
-3. Add to `MessageOrchestrator.get_bot_commands()` for Telegram's command menu
-4. Add audit logging for the command
-
-### Classic mode
-
-1. Add handler function in `src/bot/handlers/command.py`
-2. Register in `MessageOrchestrator._register_classic_handlers()`
-3. Add to `MessageOrchestrator.get_bot_commands()` for Telegram's command menu
-4. Add audit logging for the command
+**经典模式**（`src/bot/handlers/command.py`）：同上，用 `_register_classic_handlers()`。

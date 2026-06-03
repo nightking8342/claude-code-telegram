@@ -378,18 +378,11 @@ class ClaudeSDKManager:
                 stderr_lines.append(line)
                 logger.debug("Claude CLI stderr", line=line)
 
-            # Build system prompt, loading CLAUDE.md from working directory if present
+            # Build system prompt
             base_prompt = (
                 f"All file operations must stay within {working_directory}. "
                 "Use relative paths."
             )
-            claude_md_path = Path(working_directory) / "CLAUDE.md"
-            if claude_md_path.exists():
-                base_prompt += "\n\n" + claude_md_path.read_text(encoding="utf-8")
-                logger.info(
-                    "Loaded CLAUDE.md into system prompt",
-                    path=str(claude_md_path),
-                )
 
             # When DISABLE_TOOL_VALIDATION=true, pass [] for allowed/disallowed
             # tools so the SDK does not restrict tool usage (e.g. MCP tools).
@@ -436,7 +429,7 @@ class ClaudeSDKManager:
                 },
                 system_prompt=base_prompt,
                 settings=settings_overlay,
-                setting_sources=["user", "project"],
+                setting_sources=self.config.claude_setting_sources,
                 stderr=_stderr_callback,
                 permission_mode=permission_mode or None,
                 skills="all",
@@ -934,9 +927,6 @@ class ClaudeSDKManager:
                 f"All file operations must stay within {working_directory}. "
                 "Use relative paths."
             )
-            claude_md_path = Path(working_directory) / "CLAUDE.md"
-            if claude_md_path.exists():
-                base_prompt += "\n\n" + claude_md_path.read_text(encoding="utf-8")
 
             if self.provider_manager:
                 effective_model = self.provider_manager.get_effective_model() or None

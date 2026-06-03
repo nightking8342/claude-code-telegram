@@ -12,6 +12,9 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Default setting_sources — must match sdk_integration.py
+DEFAULT_SETTING_SOURCES = ["user", "project"]
+
 
 @dataclass(frozen=True)
 class SkillInfo:
@@ -19,21 +22,43 @@ class SkillInfo:
 
     name: str  # Fully qualified: "plugin:skill" or "skill-name"
     description: str
-    source: str  # "plugin:<name>" or "user"
+    source: str  # "plugin:<name>", "user", or "project"
 
 
-def discover_skills(claude_home: Optional[Path] = None) -> List[SkillInfo]:
-    """Scan the filesystem and return all available skills.
+def discover_skills(
+    claude_home: Optional[Path] = None,
+    working_directory: Optional[Path] = None,
+    setting_sources: Optional[List[str]] = None,
+) -> List[SkillInfo]:
+    """Scan the filesystem and return available skills.
 
-    Scans two locations:
-    - User-level: ``~/.claude/skills/*/SKILL.md``
-    - Plugin-level: each installed plugin's ``skills/*/SKILL.md``
+    Scans locations based on ``setting_sources`` (must match the sources
+    passed to ``ClaudeAgentOptions`` in ``sdk_integration.py``):
+
+    - ``"user"`` → ``~/.claude/skills/*/SKILL.md``
+    - ``"project"`` → ``<workdir>/../<dir>/.claude/skills/*/SKILL.md``
+      (walks from working_directory up to nearest git root)
+    - Plugins are always scanned (loaded via ``installed_plugins.json``)
+
+    Args:
+        claude_home: Path to ~/.claude directory.
+        working_directory: Current working directory for project skill discovery.
+        setting_sources: List of setting sources to include. Defaults to
+            ``["user", "project"]`` to match ``sdk_integration.py``.
     """
     if claude_home is None:
         claude_home = Path.home() / ".claude"
+    if setting_sources is None:
+        setting_sources = DEFAULT_SETTING_SOURCES
 
     skills: List[SkillInfo] = []
-    skills.extend(_scan_user_skills(claude_home / "skills"))
+
+    if "user" in setting_sources:
+        skills.extend(_scan_user_skills(claude_home / "skills"))
+
+    if "project" in setting_sources and working_directory is not None:
+        skills.extend(_scan_project_skills(working_directory))
+
     skills.extend(_scan_plugin_skills(claude_home / "plugins"))
     return skills
 
@@ -72,6 +97,56 @@ def _parse_frontmatter(path: Path) -> tuple[str, str]:
             description = desc
 
     return name, description
+
+
+def _scan_project_skills(working_directory: Path) -> List[SkillInfo]:
+    """Scan project-level ``.claude/skills/*/SKILL.md`` and
+    ``.claude/commands/*.md`` (legacy).
+
+    Walks from ``working_directory`` up to the nearest ``.git`` root
+    (or filesystem root if not in a git repo), matching CLI behaviour
+    in ``getProjectDirsUpToHome()``.
+
+    Results are ordered from most specific (CWD) to least specific (root),
+    so deeper skills take precedence when names collide.
+    """
+    results: List[SkillInfo] = []
+    current = working_directory.resolve()
+    home = Path.home().resolve()
+
+    while True:
+        # Stop at home dir (user-level skills handled separately)
+        if current == home:
+            break
+
+        # Skills (directory format)
+        skills_dir = current / ".claude" / "skills"
+        if skills_dir.is_dir():
+            for skill_md in skills_dir.glob("*/SKILL.md"):
+                name, description = _parse_frontmatter(skill_md)
+                results.append(
+                    SkillInfo(name=name, description=description, source="project")
+                )
+
+        # Legacy commands (single .md file format)
+        commands_dir = current / ".claude" / "commands"
+        if commands_dir.is_dir():
+            for cmd_md in commands_dir.glob("*.md"):
+                name, description = _parse_frontmatter(cmd_md)
+                results.append(
+                    SkillInfo(name=name, description=description, source="project")
+                )
+
+        # Stop at git root
+        if (current / ".git").exists():
+            break
+
+        parent = current.parent
+        if parent == current:
+            break  # reached filesystem root
+        current = parent
+
+    return results
 
 
 def _scan_user_skills(skills_dir: Path) -> List[SkillInfo]:

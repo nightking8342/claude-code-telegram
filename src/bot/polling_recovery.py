@@ -19,6 +19,7 @@ _BACKOFF_FACTOR = 2.0
 _BACKOFF_JITTER = 0.5
 _RECONNECT_STOP_TIMEOUT_S = 15.0
 _RECONNECT_DRAIN_S = 2.0
+_SLOW_RETRY_INTERVAL_S = 30.0
 
 
 def _is_polling_conflict(exc: BaseException) -> bool:
@@ -118,6 +119,13 @@ class PollingRecoveryManager:
         self._reconnect_task: asyncio.Task | None = None
         self._error_handler_registered = False
         self._reconnecting = False
+        self._slow_retrying = False
+        self._slow_retry_count = 0
+        self._next_retry_at: float | None = None
+        self._last_reason: str | None = None
+        self._last_error: str | None = None
+        self._last_error_type: str | None = None
+        self._last_recovered_at: float | None = None
 
     async def start(
         self,
@@ -196,6 +204,9 @@ class PollingRecoveryManager:
             return
 
         self._liveness.note_activity()
+        self._last_reason = reason
+        self._last_error = str(exc)
+        self._last_error_type = type(exc).__name__
         if self._reconnect_task and not self._reconnect_task.done():
             return
 
@@ -235,6 +246,10 @@ class PollingRecoveryManager:
         if self._reconnecting:
             return
         self._reconnecting = True
+        self._last_reason = reason
+        if exc is not None:
+            self._last_error = str(exc)
+            self._last_error_type = type(exc).__name__
 
         try:
             await self._initial_reconnect_delay(reason, exc)
@@ -249,6 +264,9 @@ class PollingRecoveryManager:
 
                 if await self._try_restart_polling(reason):
                     self._ladder.reset()
+                    self._slow_retrying = False
+                    self._slow_retry_count = 0
+                    self._last_recovered_at = time.time()
                     logger.info(
                         "Telegram polling recovered",
                         reason=reason,
@@ -257,6 +275,7 @@ class PollingRecoveryManager:
                     return
 
                 delay = self._ladder.next_backoff()
+                self._next_retry_at = time.monotonic() + delay
                 logger.warning(
                     "Telegram polling recovery attempt failed",
                     reason=reason,
@@ -264,15 +283,85 @@ class PollingRecoveryManager:
                     backoff_s=f"{delay:.1f}",
                 )
                 await asyncio.sleep(delay)
+                self._next_retry_at = None
 
             logger.error(
-                "Failed to recover Telegram polling",
+                "Failed to recover Telegram polling; entering slow retry",
                 reason=reason,
                 attempts=self._ladder.retries,
+                slow_retry_interval_s=_SLOW_RETRY_INTERVAL_S,
             )
+
+            self._slow_retrying = True
+            while True:
+                self._next_retry_at = time.monotonic() + _SLOW_RETRY_INTERVAL_S
+                await asyncio.sleep(_SLOW_RETRY_INTERVAL_S)
+                self._next_retry_at = None
+                self._slow_retry_count += 1
+
+                logger.warning(
+                    "Slow retrying Telegram polling",
+                    reason=reason,
+                    slow_attempt=self._slow_retry_count,
+                )
+                if await self._try_restart_polling(reason):
+                    self._ladder.reset()
+                    self._slow_retrying = False
+                    self._slow_retry_count = 0
+                    self._last_recovered_at = time.time()
+                    logger.info(
+                        "Telegram polling recovered",
+                        reason=reason,
+                        attempt="slow",
+                    )
+                    return
         finally:
             self._reconnecting = False
+            self._slow_retrying = False
+            self._next_retry_at = None
             self._reconnect_task = None
+
+    def get_status(self) -> dict:
+        """Return a serializable snapshot of polling recovery state."""
+        updater = self._app.updater if self._app is not None else None
+        polling_running = (
+            bool(getattr(updater, "running", False)) if updater else False
+        )
+        polling_task = getattr(updater, "_polling_task", None) if updater else None
+        polling_task_done = (
+            bool(polling_task.done()) if polling_task is not None else None
+        )
+        reconnect_task_running = bool(
+            self._reconnect_task and not self._reconnect_task.done()
+        )
+        next_retry_seconds = None
+        if self._next_retry_at is not None:
+            next_retry_seconds = max(0, round(self._next_retry_at - time.monotonic()))
+
+        if self._slow_retrying:
+            recovery_state = "slow_retrying"
+        elif self._reconnecting:
+            recovery_state = "reconnecting"
+        else:
+            recovery_state = "idle"
+
+        return {
+            "polling_running": polling_running,
+            "polling_task_done": polling_task_done,
+            "recovery_state": recovery_state,
+            "reconnect_task_running": reconnect_task_running,
+            "retries": self._ladder.retries,
+            "max_retries": self._ladder.max_retries,
+            "exhausted": self._ladder.exhausted,
+            "slow_retrying": self._slow_retrying,
+            "slow_retry_count": self._slow_retry_count,
+            "slow_retry_interval_seconds": _SLOW_RETRY_INTERVAL_S,
+            "next_retry_seconds": next_retry_seconds,
+            "last_reason": self._last_reason,
+            "last_error": self._last_error,
+            "last_error_type": self._last_error_type,
+            "last_recovered_at": self._last_recovered_at,
+        }
 
     async def _initial_reconnect_delay(
         self, reason: str, exc: BaseException | None

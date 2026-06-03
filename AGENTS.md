@@ -1,80 +1,84 @@
 # AGENTS.md
 
-This file gives Codex repository-specific rules for working on this project.
-Follow it in addition to higher-priority system/developer instructions.
+本文件提供 Codex 在本仓库中工作时需要遵守的项目专属规则。
+除更高优先级的 system/developer 指令外，也要遵守本文件。
 
-## Project Shape
+## 项目结构
 
-- This is a Python Telegram bot that exposes Claude Code through Telegram.
-- Runtime entrypoint: `src.main:run`, installed as `claude-telegram-bot`.
-- Main packages:
-  - `src/bot/`: Telegram application, handlers, middleware, orchestration.
-  - `src/claude/`: Claude SDK facade, SDK client execution, sessions, BTW.
-  - `src/storage/`: SQLite storage and repositories.
-  - `src/security/`: auth, validation, audit, rate limiting.
-  - `src/config/`: Pydantic settings and feature flags.
-  - `src/api/`, `src/events/`, `src/scheduler/`, `src/notifications/`: automation platform.
-- Tests live under `tests/unit/` and generally mirror `src/`.
+- 这是一个 Python Telegram bot，用来通过 Telegram 暴露 Claude Code。
+- 运行入口：`src.main:run`，安装命令名为 `claude-telegram-bot`。
+- 主要包：
+  - `src/bot/`：Telegram 应用、handlers、middleware、编排逻辑。
+  - `src/claude/`：Claude SDK facade、SDK client 执行、sessions、BTW。
+  - `src/storage/`：SQLite 存储和 repositories。
+  - `src/security/`：认证、校验、审计、限流。
+  - `src/config/`：Pydantic settings 和 feature flags。
+  - `src/api/`、`src/events/`、`src/scheduler/`、`src/notifications/`：自动化平台。
+- 测试位于 `tests/unit/`，通常与 `src/` 结构对应。
 
-## Local Runtime Facts
+## 本地运行事实
 
-- Development workspace: `D:\claudebot\claude-code-telegram`.
-- Bot state/log directory on this machine: `C:\Users\WHY\.claude-tg-bot`.
-- Active local env file is normally `C:\Users\WHY\.claude-tg-bot\.env`, not a repo-root `.env`.
-- Current Windows launcher: `C:\Users\WHY\.claude-tg-bot\start-bot.vbs`.
-- Installed command path: `C:\Users\WHY\.local\bin\claude-telegram-bot.exe`.
-- The bot is installed editable with `uv tool install --force --editable .`; source changes still require bot restart.
-- Health endpoint, when enabled: `http://127.0.0.1:8080/health`.
+- 开发工作区：`D:\claudebot\claude-code-telegram`。
+- 本机 bot 状态/日志目录：`C:\Users\WHY\.claude-tg-bot`。
+- 当前本地 env 文件通常是 `C:\Users\WHY\.claude-tg-bot\.env`，不是仓库根目录的 `.env`。
+- 当前 Windows launcher：`C:\Users\WHY\.claude-tg-bot\start-bot.vbs`。
+- 已安装命令路径：`C:\Users\WHY\.local\bin\claude-telegram-bot.exe`。
+- bot 通过 `uv tool install --force --editable .` 以 editable 方式安装；源码改动仍然需要重启 bot 才会生效。
+- health endpoint 启用时地址为：`http://127.0.0.1:8080/health`。
 
-## Engineering Rules
+## 工程规则
 
-- Prefer existing patterns over new abstractions. This codebase uses async Python, `python-telegram-bot`, Pydantic Settings, `structlog`, and repository-style storage.
-- Use `rg`/`rg --files` for search.
-- Use `apply_patch` for manual edits.
-- Do not rewrite large files with formatters unless the task explicitly calls for it. Some files have broad existing diffs.
-- Avoid touching unrelated dirty files. Assume uncommitted changes may belong to the user.
-- Keep comments sparse and useful. Do not add narration comments for obvious code.
-- Use timezone-aware UTC: `datetime.now(UTC)`, not `datetime.utcnow()`.
-- Keep persistent data out of source files. Runtime snapshots such as active BTW state must stay in memory unless a feature explicitly requires metadata persistence.
+- 优先沿用现有模式，不要轻易引入新抽象。本代码库使用 async Python、`python-telegram-bot`、Pydantic Settings、`structlog` 和 repository 风格存储。
+- 搜索时使用 `rg`/`rg --files`。
+- 手工编辑使用 `apply_patch`。
+- 除非任务明确要求，不要用 formatter 重写大文件。有些文件可能已有大范围现存 diff。
+- 避免触碰无关的脏文件。假设未提交改动可能属于用户。
+- 注释要少而有用。不要为显而易见的代码添加叙述性注释。
+- 使用带时区的 UTC：`datetime.now(UTC)`，不要用 `datetime.utcnow()`。
+- 不要把持久化数据放进源码文件。除非某个功能明确需要元数据持久化，否则 active BTW state 等运行时快照必须保留在内存中。
 
-## Claude SDK Rules
+## 变更日志维护
 
-- Main Claude runs should load user and project Claude settings:
+- 创建、编辑或审查 `CHANGELOG.md`、`CHANGELOG.zh-CN.md`、release notes 或版本历史时，先阅读并遵守 `.claude/rules/changelog.md`。
+
+## Claude SDK 规则
+
+- 主 Claude 运行应加载用户和项目 Claude settings：
   - `setting_sources=["user", "project"]`
-- `/btw` side-question runs should remain isolated:
+- `/btw` 旁路问题运行必须保持隔离：
   - `setting_sources=["project"]`
   - `max_turns=1`
   - `tools=[]`
   - `allowed_tools=[]`
-  - no MCP servers
-  - no `can_use_tool`
-  - use `resume=<parent_session_id>` with `fork_session=True` only when a parent session id exists.
-- Never let a `/btw` result replace `context.user_data["claude_session_id"]`.
-- Never save `/btw` question text or runtime snapshot into the main interaction history.
-- BTW runs must use an ephemeral Claude config directory and clean it up after completion; new BTW sessions should not persist in Claude local JSONL or Telegram storage. Keep legacy BTW fork filtering for older recorded fork sessions.
+  - 不使用 MCP servers
+  - 不使用 `can_use_tool`
+  - 仅当存在 parent session id 时，才使用 `resume=<parent_session_id>` 且 `fork_session=True`。
+- 永远不要让 `/btw` 的结果替换 `context.user_data["claude_session_id"]`。
+- 永远不要把 `/btw` 的问题文本或运行时快照保存进主交互历史。
+- BTW 运行必须使用临时 Claude config 目录，并在完成后清理；新的 BTW sessions 不应持久化到 Claude 本地 JSONL 或 Telegram storage。继续保留 legacy BTW fork filtering，用于过滤旧记录中的 fork sessions。
 
-## Telegram Bot Rules
+## Telegram Bot 规则
 
-- `/btw`, stop actions, and AUQ callbacks must bypass normal sequential processing so they work while a main task is running.
-- Normal text and ordinary commands should remain serialized per user/chat.
-- Telegram command menus must be written to both default scope and `BotCommandScopeAllPrivateChats`.
-  - A previous official Telegram Claude plugin can leave `all_private_chats` commands behind; default scope alone will not override the menu seen in private chats.
-- After changing command registration, restart the bot and verify command scopes with `get_my_commands()` for both default and all-private scope.
-- Do not re-enable `telegram@claude-plugins-official` in `C:\Users\WHY\.claude\settings.json` for this project. It can start its own Telegram `getUpdates` poller and conflict with this bot.
+- `/btw`、stop actions 和 AUQ callbacks 必须绕过普通顺序处理，这样主任务运行时它们仍能工作。
+- 普通文本和普通命令应按 user/chat 保持串行。
+- Telegram 命令菜单必须同时写入默认 scope 和 `BotCommandScopeAllPrivateChats`。
+  - 之前的官方 Telegram Claude plugin 可能会在 `all_private_chats` 留下命令；只写默认 scope 无法覆盖私聊里看到的菜单。
+- 修改命令注册后，重启 bot，并用 `get_my_commands()` 同时验证 default scope 和 all-private scope。
+- 不要在本项目中重新启用 `C:\Users\WHY\.claude\settings.json` 里的 `telegram@claude-plugins-official`。它可能启动自己的 Telegram `getUpdates` poller，并与本 bot 冲突。
 
-## Security And Environment
+## 安全与环境
 
-- `TELEGRAM_BOT_TOKEN` belongs to this bot. Be careful not to leak it into logs, docs, or command output.
-- Claude subprocesses inherit environment by default. Before adding user-level plugins/MCP behavior, consider whether sensitive bot env vars could be exposed to child processes.
-- Do not print full Telegram tokens. If a command output includes one, summarize without reproducing it.
-- Approved directory boundaries matter. File and shell tools must stay within `APPROVED_DIRECTORY` unless the user explicitly changes project configuration.
+- `TELEGRAM_BOT_TOKEN` 属于这个 bot。注意不要把它泄漏到日志、文档或命令输出中。
+- Claude subprocess 默认继承环境。添加用户级 plugins/MCP 行为前，要考虑敏感 bot env vars 是否可能暴露给子进程。
+- 不要打印完整 Telegram tokens。如果命令输出包含 token，应总结输出而不要复现 token。
+- Approved directory 边界很重要。除非用户明确修改项目配置，否则文件和 shell 工具必须留在 `APPROVED_DIRECTORY` 内。
 
-## Logging And Diagnostics
+## 日志与诊断
 
-- Main log: `C:\Users\WHY\.claude-tg-bot\bot.log`.
-- Launcher log: `C:\Users\WHY\.claude-tg-bot\launcher.log`.
-- Restart helper log may exist at `C:\Users\WHY\.claude-tg-bot\restart-helper.log`.
-- Important log events:
+- 主日志：`C:\Users\WHY\.claude-tg-bot\bot.log`。
+- Launcher 日志：`C:\Users\WHY\.claude-tg-bot\launcher.log`。
+- Restart helper 日志可能位于：`C:\Users\WHY\.claude-tg-bot\restart-helper.log`。
+- 重要日志事件：
   - `/btw received`
   - `/btw progress message sent`
   - `Starting Claude SDK command`
@@ -82,11 +86,11 @@ Follow it in addition to higher-priority system/developer instructions.
   - `Polling transport error`
   - `Conflict: terminated by other getUpdates request`
   - `Bot commands set`
-- Log timestamps are UTC ISO strings. Convert to local time when comparing with user reports.
+- 日志时间戳是 UTC ISO 字符串。与用户报告对比时要转换成本地时间。
 
-## Testing
+## 测试
 
-Use focused tests for the touched area first. Common commands:
+优先对触及区域运行聚焦测试。常用命令：
 
 ```powershell
 .\.venv\Scripts\python.exe -m py_compile src\bot\core.py src\claude\sdk_integration.py
@@ -95,28 +99,28 @@ Use focused tests for the touched area first. Common commands:
 .\.venv\Scripts\python.exe -m pytest tests\unit\test_bot\test_core_rate_limiter.py -q
 ```
 
-For broader validation:
+更广泛验证：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\unit -q
 ```
 
-## Restarting The Local Bot
+## 重启本地 Bot
 
-- Source edits do not affect the running process until restart.
-- Prefer the existing launcher after stopping the current main PID from `C:\Users\WHY\.claude-tg-bot\bot.pid`.
-- After restart, verify:
-  - only one `claude-telegram-bot.exe` process chain exists,
-  - `http://127.0.0.1:8080/health` returns `{"status":"ok"}`,
-  - recent log has a fresh `Single-instance lock acquired` and `Bot commands set`.
+- 源码改动不会影响正在运行的进程，必须重启后才会生效。
+- 优先使用现有 launcher；先根据 `C:\Users\WHY\.claude-tg-bot\bot.pid` 停止当前 main PID。
+- 重启后验证：
+  - 只存在一条 `claude-telegram-bot.exe` 进程链，
+  - `http://127.0.0.1:8080/health` 返回 `{"status":"ok"}`，
+  - 最新日志中有新的 `Single-instance lock acquired` 和 `Bot commands set`。
 
-## Recent Project-Specific Pitfalls
+## 近期项目专属坑点
 
-- Official Claude Code Telegram plugin conflict:
-  - It can be loaded from user Claude settings and start a second Telegram poller.
-  - It previously caused `/btw`, stop buttons, AUQ buttons, and `/restart` to appear unresponsive during main Claude runs.
-  - The plugin was removed from user Claude config and local plugin cache; do not add it back unless using a separate bot token and state directory.
-- Telegram command menu cache/scope:
-  - If manual commands work but the menu is wrong, check `all_private_chats` scope before debugging handlers.
-- BTW is immediate only if Telegram polling is healthy:
-  - If `/btw` does not even send the "answering" message, inspect polling/update ingestion first, not the BTW handler.
+- 官方 Claude Code Telegram plugin 冲突：
+  - 它可能从用户 Claude settings 加载，并启动第二个 Telegram poller。
+  - 它之前导致 `/btw`、stop buttons、AUQ buttons 和 `/restart` 在主 Claude 运行期间看起来无响应。
+  - 该 plugin 已从用户 Claude config 和本地 plugin cache 中移除；除非使用单独的 bot token 和 state directory，否则不要加回去。
+- Telegram 命令菜单 cache/scope：
+  - 如果手动命令可用但菜单错误，应先检查 `all_private_chats` scope，再调试 handlers。
+- BTW 只有在 Telegram polling 健康时才会即时响应：
+  - 如果 `/btw` 连 "answering" 消息都没有发送，应先检查 polling/update ingestion，而不是先查 BTW handler。
