@@ -59,6 +59,8 @@ _MEDIA_TYPE_MAP = {
     "webp": "image/webp",
 }
 
+_HOOK_TIMEOUT_SDK_GRACE_SECONDS = 30
+
 # Patterns that look like secrets/credentials in CLI arguments
 _SECRET_PATTERNS: List[re.Pattern[str]] = [
     # API keys / tokens (sk-ant-..., sk-..., ghp_..., gho_..., github_pat_..., xoxb-...)
@@ -139,12 +141,32 @@ class ActiveRequest:
     interrupt_event: asyncio.Event = field(default_factory=asyncio.Event)
     interrupted: bool = False
     progress_msg: Any = None  # telegram Message object
+    progress_messages: List[Any] = field(default_factory=list)
     tool_log: List[Dict[str, Any]] = field(default_factory=list)
     last_status: str = "Starting"
     current_tool: Optional[str] = None
     last_assistant_text: str = ""
     recent_stream_text: str = ""
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def __post_init__(self) -> None:
+        if self.progress_msg is not None:
+            self.progress_messages.append(self.progress_msg)
+
+    async def switch_progress_msg(self, progress_msg: Any) -> None:
+        """Point subsequent stream edits at a new Telegram progress message."""
+        async with self.lock:
+            self.progress_msg = progress_msg
+            if progress_msg is not None and progress_msg not in self.progress_messages:
+                self.progress_messages.append(progress_msg)
+
+    async def current_progress_msg(self) -> Any:
+        async with self.lock:
+            return self.progress_msg
+
+    async def all_progress_messages(self) -> List[Any]:
+        async with self.lock:
+            return list(self.progress_messages)
 
     async def apply_stream_update(self, update_obj: StreamUpdate) -> None:
         """Update the in-memory /btw runtime snapshot from a stream event."""
@@ -1598,7 +1620,12 @@ class MessageOrchestrator:
                         tool_log, verbose_level, start_time
                     )
                     try:
-                        await progress_msg.edit_text(
+                        current_progress_msg = (
+                            await active_request.current_progress_msg()
+                            if active_request is not None
+                            else progress_msg
+                        )
+                        await current_progress_msg.edit_text(
                             new_text, reply_markup=reply_markup
                         )
                     except Exception:
@@ -1753,8 +1780,29 @@ class MessageOrchestrator:
         # Check if user is providing plan feedback from ExitPlanMode
         plan_waiting = self._pending_plan_waiting.pop(user_id, None)
         if plan_waiting:
+            from .update_processor import StopAwareUpdateProcessor
+
+            StopAwareUpdateProcessor.plan_feedback_waiting.discard(user_id)
             future = plan_waiting["future"]
             if future and not future.done():
+                active_request = self._active_requests.get(user_id)
+                if active_request is not None:
+                    stop_kb = InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("停止", callback_data=f"stop:{user_id}")]]
+                    )
+                    try:
+                        progress_msg = await update.message.reply_text(
+                            "✏️ 已收到修改意见，正在让 Claude 调整计划...",
+                            reply_to_message_id=update.message.message_id,
+                            reply_markup=stop_kb,
+                        )
+                        await active_request.switch_progress_msg(progress_msg)
+                    except Exception as exc:
+                        logger.debug(
+                            "Failed to create plan feedback progress message",
+                            user_id=user_id,
+                            error=str(exc),
+                        )
                 future.set_result({"action": "feedback", "feedback": message_text})
                 query = plan_waiting.get("query")
                 if query:
@@ -1765,9 +1813,10 @@ class MessageOrchestrator:
                         )
                     except Exception:
                         pass
-                await update.message.reply_text(
-                    "✅ 已将修改意见发送给 Claude，正在调整方案..."
-                )
+                if active_request is None:
+                    await update.message.reply_text(
+                        "✅ 已将修改意见发送给 Claude，正在调整方案..."
+                    )
             return
 
         logger.info(
@@ -1944,10 +1993,11 @@ class MessageOrchestrator:
                 except Exception:
                     logger.debug("Draft flush failed in finally block", user_id=user_id)
 
-        try:
-            await progress_msg.delete()
-        except Exception:
-            logger.debug("Failed to delete progress message, ignoring")
+        for msg in await active_request.all_progress_messages():
+            try:
+                await msg.delete()
+            except Exception:
+                logger.debug("Failed to delete progress message, ignoring")
 
         # Use MCP-collected images (from send_image_to_user tool calls)
         images: List[ImageAttachment] = mcp_images
@@ -2754,6 +2804,8 @@ class MessageOrchestrator:
         from claude_agent_sdk import HookMatcher  # type: ignore[import-untyped]
 
         orchestrator_ref = self  # capture for closure
+        hook_timeout = self._effective_hook_timeout_seconds()
+        matcher_timeout = hook_timeout + _HOOK_TIMEOUT_SDK_GRACE_SECONDS
 
         async def _auq_hook(
             hook_input: Any, stdin: Any = None, context: Any = None
@@ -2812,8 +2864,7 @@ class MessageOrchestrator:
                     tool_use_id=tool_use_id,
                 )
 
-                # Wait for user answer (no单独 timeout; CLAUDE_TIMEOUT_SECONDS兜底)
-                result = await future
+                result = await asyncio.wait_for(future, timeout=hook_timeout)
 
                 selected = result.get("selected", [])
                 answer_str = ", ".join(f"'{s}'" for s in selected)
@@ -2821,9 +2872,14 @@ class MessageOrchestrator:
                 return {
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
-                        "permissionDecision": "allow",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            f"User selected via Telegram: {answer_str}"
+                        ),
                         "additionalContext": (
-                            f"User answered via Telegram: {answer_str}"
+                            "The AskUserQuestion tool was answered via Telegram. "
+                            f"Question: {question_text}. Selected answer(s): "
+                            f"{answer_str}."
                         ),
                     }
                 }
@@ -2833,6 +2889,21 @@ class MessageOrchestrator:
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
                         "permissionDecisionReason": ("AskUserQuestion was cancelled"),
+                    }
+                }
+            except asyncio.TimeoutError:
+                await orchestrator_ref._expire_auq_message(tid_short, tool_use_id)
+                orchestrator_ref._interrupt_active_request_after_hook_timeout(
+                    user_id,
+                    "AskUserQuestion timed out waiting for Telegram answer",
+                )
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "AskUserQuestion timed out waiting for Telegram answer"
+                        ),
                     }
                 }
             except Exception as exc:
@@ -2850,7 +2921,13 @@ class MessageOrchestrator:
                 orchestrator_ref._pending_auq.pop(tool_use_id, None)
 
         return {
-            "PreToolUse": [HookMatcher(matcher="AskUserQuestion", hooks=[_auq_hook])]
+            "PreToolUse": [
+                HookMatcher(
+                    matcher="AskUserQuestion",
+                    hooks=[_auq_hook],
+                    timeout=matcher_timeout,
+                )
+            ]
         }
 
     @staticmethod
@@ -2886,6 +2963,8 @@ class MessageOrchestrator:
         from claude_agent_sdk import HookMatcher  # type: ignore[import-untyped]
 
         orchestrator_ref = self
+        hook_timeout = self._effective_hook_timeout_seconds()
+        matcher_timeout = hook_timeout + _HOOK_TIMEOUT_SDK_GRACE_SECONDS
 
         def _load_plan_content(hook_input: Any) -> Optional[str]:
             """Extract plan text from hook input or read from file."""
@@ -2937,7 +3016,7 @@ class MessageOrchestrator:
                         ]
                     ]
                 )
-                await bot.send_message(
+                prompt_msg = await bot.send_message(
                     chat_id=chat_id,
                     text=(
                         "📋 <b>Claude 请求进入规划模式</b>\n\n"
@@ -2948,7 +3027,7 @@ class MessageOrchestrator:
                     reply_markup=kb,
                 )
 
-                result = await future
+                result = await asyncio.wait_for(future, timeout=hook_timeout)
                 action = result.get("action", "deny")
 
                 if action == "approve":
@@ -2973,6 +3052,22 @@ class MessageOrchestrator:
                         "permissionDecisionReason": "EnterPlanMode 已取消",
                     }
                 }
+            except asyncio.TimeoutError:
+                await orchestrator_ref._expire_plan_message(
+                    prompt_msg,
+                    "⏰ 进入规划模式请求已超时，未批准。",
+                )
+                orchestrator_ref._interrupt_active_request_after_hook_timeout(
+                    user_id,
+                    "EnterPlanMode timed out waiting for Telegram approval",
+                )
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "EnterPlanMode 等待 Telegram 确认超时",
+                    }
+                }
             except Exception as exc:
                 logger.error("EnterPlanMode hook error", error=str(exc))
                 return {
@@ -2990,6 +3085,7 @@ class MessageOrchestrator:
         ) -> dict:
             future = asyncio.get_event_loop().create_future()
             orchestrator_ref._pending_plan[user_id] = future
+            prompt_msg = None
             try:
                 kb = InlineKeyboardMarkup(
                     [
@@ -3033,7 +3129,7 @@ class MessageOrchestrator:
                                 doc_name = f"{safe[:50]}.md"
                             break
 
-                    await bot.send_document(
+                    prompt_msg = await bot.send_document(
                         chat_id=chat_id,
                         document=io.BytesIO(plan_bytes),
                         filename=doc_name,
@@ -3041,7 +3137,7 @@ class MessageOrchestrator:
                         reply_markup=kb,
                     )
                 else:
-                    await bot.send_message(
+                    prompt_msg = await bot.send_message(
                         chat_id=chat_id,
                         text=(
                             "📋 <b>Claude 请求退出规划模式</b>\n\n"
@@ -3050,7 +3146,7 @@ class MessageOrchestrator:
                         parse_mode="HTML",
                         reply_markup=kb,
                     )
-                result = await future
+                result = await asyncio.wait_for(future, timeout=hook_timeout)
                 action = result.get("action", "deny")
                 if action == "approve":
                     return {
@@ -3088,6 +3184,22 @@ class MessageOrchestrator:
                         "permissionDecisionReason": "ExitPlanMode 已取消",
                     }
                 }
+            except asyncio.TimeoutError:
+                await orchestrator_ref._expire_plan_message(
+                    prompt_msg,
+                    "⏰ 退出规划模式请求已超时，未批准执行计划。",
+                )
+                orchestrator_ref._interrupt_active_request_after_hook_timeout(
+                    user_id,
+                    "ExitPlanMode timed out waiting for Telegram approval",
+                )
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "ExitPlanMode 等待 Telegram 确认超时",
+                    }
+                }
             except Exception as exc:
                 logger.error("ExitPlanMode hook error", error=str(exc))
                 return {
@@ -3102,10 +3214,56 @@ class MessageOrchestrator:
 
         return {
             "PreToolUse": [
-                HookMatcher(matcher="EnterPlanMode", hooks=[_enter_plan_hook]),
-                HookMatcher(matcher="ExitPlanMode", hooks=[_exit_plan_hook]),
+                HookMatcher(
+                    matcher="EnterPlanMode",
+                    hooks=[_enter_plan_hook],
+                    timeout=matcher_timeout,
+                ),
+                HookMatcher(
+                    matcher="ExitPlanMode",
+                    hooks=[_exit_plan_hook],
+                    timeout=matcher_timeout,
+                ),
             ]
         }
+
+    def _effective_hook_timeout_seconds(self) -> float:
+        timeout = getattr(self.settings, "effective_claude_hook_timeout_seconds", None)
+        if isinstance(timeout, (int, float)) and timeout > 0:
+            return float(timeout)
+        return 24 * 60 * 60
+
+    def _interrupt_active_request_after_hook_timeout(
+        self, user_id: int, reason: str
+    ) -> None:
+        active_request = self._active_requests.get(user_id)
+        if active_request is None:
+            return
+        active_request.interrupted = True
+        asyncio.get_running_loop().call_soon(active_request.interrupt_event.set)
+        logger.info(
+            "Hook timeout interrupted active request",
+            user_id=user_id,
+            reason=reason,
+        )
+
+    async def _expire_plan_message(self, msg: Any, text: str) -> None:
+        if msg is None:
+            return
+        try:
+            await msg.edit_caption(caption=text, reply_markup=None)
+            return
+        except Exception:
+            pass
+        try:
+            await msg.edit_text(text, reply_markup=None)
+            return
+        except Exception:
+            pass
+        try:
+            await msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
     async def _handle_plan_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -3156,6 +3314,24 @@ class MessageOrchestrator:
         # ExitPlanMode actions — edit caption + remove buttons,
         # keep the document attachment intact.
         elif action == "exit_approve":
+            active_request = self._active_requests.get(target_uid)
+            if active_request is not None and query.message is not None:
+                stop_kb = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("停止", callback_data=f"stop:{target_uid}")]]
+                )
+                try:
+                    progress_msg = await query.message.reply_text(
+                        "✅ 已允许执行最终计划，正在执行...",
+                        reply_to_message_id=query.message.message_id,
+                        reply_markup=stop_kb,
+                    )
+                    await active_request.switch_progress_msg(progress_msg)
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to create plan execution progress message",
+                        user_id=target_uid,
+                        error=str(exc),
+                    )
             future.set_result({"action": "approve"})
             try:
                 await query.edit_message_caption(
@@ -3175,10 +3351,13 @@ class MessageOrchestrator:
                 pass
         elif action == "exit_feedback":
             # Register user for free-text feedback input
+            from .update_processor import StopAwareUpdateProcessor
+
             self._pending_plan_waiting[target_uid] = {
                 "future": future,
                 "query": query,
             }
+            StopAwareUpdateProcessor.plan_feedback_waiting.add(target_uid)
             try:
                 await query.edit_message_caption(
                     caption="✏️ 等待你的修改意见…",
@@ -3287,8 +3466,43 @@ class MessageOrchestrator:
             "options": options,
             "multi_select": multi_select,
             "question_text": question_text,
+            "header": header,
             "tool_use_id": tool_use_id,
         }
+
+    async def _expire_auq_message(self, tid_short: str, tool_use_id: str) -> None:
+        meta = getattr(self, "_auq_messages", {}).pop(tid_short, None)
+        getattr(self, "_auq_multi_state", {}).pop(tool_use_id, None)
+
+        waiting_user_ids = [
+            user_id
+            for user_id, waiting in self._auq_waiting_other.items()
+            if waiting.get("tool_use_id") == tool_use_id
+        ]
+        for user_id in waiting_user_ids:
+            self._auq_waiting_other.pop(user_id, None)
+            try:
+                from .update_processor import StopAwareUpdateProcessor
+
+                StopAwareUpdateProcessor.auq_other_waiting.discard(user_id)
+            except Exception:
+                pass
+
+        if not meta:
+            return
+
+        header = meta.get("header", "")
+        header_line = f"<b>{escape_html(header)}</b>\n" if header else ""
+        text = (
+            f"🤔 {header_line}<b>Claude 想问你：</b>\n"
+            f"{escape_html(meta.get('question_text', ''))}\n\n"
+            "⏰ 此问题已超时，未选择任何选项。"
+        )
+        msg = meta.get("msg")
+        try:
+            await msg.edit_text(text, parse_mode="HTML", reply_markup=None)
+        except Exception:
+            pass
 
     async def _handle_auq_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

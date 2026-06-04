@@ -187,6 +187,164 @@ async def test_classic_bot_commands(classic_settings, deps):
         assert cmd in cmd_names
 
 
+async def test_auq_hook_denies_original_tool_with_telegram_answer(agentic_settings, deps):
+    """AUQ hook must not allow the headless AskUserQuestion tool to read stdin."""
+    orchestrator = MessageOrchestrator(agentic_settings, deps)
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=MagicMock())
+    hooks = orchestrator._build_auq_hook(bot=bot, chat_id=456, user_id=123)
+    hook = hooks["PreToolUse"][0].hooks[0]
+
+    task = asyncio.create_task(
+        hook(
+            {
+                "tool_use_id": "call_auq_1234567890",
+                "tool_input": {
+                    "questions": [
+                        {
+                            "question": "Execute the plan?",
+                            "options": [
+                                {
+                                    "label": "Run it",
+                                    "description": "Apply the planned changes",
+                                },
+                                {"label": "Stop", "description": "Do not change files"},
+                            ],
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+    for _ in range(10):
+        if "call_auq_1234567890" in orchestrator._pending_auq:
+            break
+        await asyncio.sleep(0)
+
+    future = orchestrator._pending_auq["call_auq_1234567890"]
+    future.set_result({"selected": ["Run it"]})
+    result = await task
+
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "Run it" in output["permissionDecisionReason"]
+    assert "Execute the plan?" in output["additionalContext"]
+    assert "Run it" in output["additionalContext"]
+
+
+def test_interactive_hooks_use_configured_timeout(agentic_settings, deps):
+    """AUQ and plan mode hooks should not fall back to Claude Code's 10m default."""
+    agentic_settings.claude_hook_timeout_seconds = 1800
+    orchestrator = MessageOrchestrator(agentic_settings, deps)
+    bot = MagicMock()
+
+    auq_hooks = orchestrator._build_auq_hook(bot=bot, chat_id=456, user_id=123)
+    plan_hooks = orchestrator._build_plan_mode_hook(bot=bot, chat_id=456, user_id=123)
+
+    assert auq_hooks["PreToolUse"][0].timeout == 1830
+    assert plan_hooks["PreToolUse"][0].timeout == 1830
+    assert plan_hooks["PreToolUse"][1].timeout == 1830
+
+
+@pytest.mark.asyncio
+async def test_auq_hook_timeout_denies_and_expires_message(deps):
+    """AUQ timeout should deny the tool and remove stale Telegram buttons."""
+    settings = MagicMock()
+    settings.effective_claude_hook_timeout_seconds = 0.01
+    orchestrator = MessageOrchestrator(settings, deps)
+    active = ActiveRequest(user_id=123, progress_msg=MagicMock())
+    orchestrator._active_requests[123] = active
+    msg = MagicMock()
+    msg.edit_text = AsyncMock()
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=msg)
+
+    hooks = orchestrator._build_auq_hook(bot=bot, chat_id=456, user_id=123)
+    hook = hooks["PreToolUse"][0].hooks[0]
+
+    result = await hook(
+        {
+            "tool_use_id": "call_auq_timeout",
+            "tool_input": {
+                "questions": [
+                    {
+                        "question": "Pick one?",
+                        "options": [{"label": "A"}, {"label": "B"}],
+                    }
+                ]
+            },
+        }
+    )
+
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "timed out" in output["permissionDecisionReason"]
+    assert "call_auq_timeout" not in orchestrator._pending_auq
+    assert getattr(orchestrator, "_auq_messages", {}) == {}
+    msg.edit_text.assert_awaited_once()
+    await asyncio.sleep(0)
+    assert active.interrupted is True
+    assert active.interrupt_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_enter_plan_timeout_denies_and_expires_message(deps):
+    """EnterPlanMode timeout should deny instead of allowing the default action."""
+    settings = MagicMock()
+    settings.effective_claude_hook_timeout_seconds = 0.01
+    orchestrator = MessageOrchestrator(settings, deps)
+    active = ActiveRequest(user_id=123, progress_msg=MagicMock())
+    orchestrator._active_requests[123] = active
+    msg = MagicMock()
+    msg.edit_caption = AsyncMock()
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=msg)
+
+    hooks = orchestrator._build_plan_mode_hook(bot=bot, chat_id=456, user_id=123)
+    hook = hooks["PreToolUse"][0].hooks[0]
+
+    result = await hook({"tool_input": {}})
+
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "超时" in output["permissionDecisionReason"]
+    assert 123 not in orchestrator._pending_plan
+    msg.edit_caption.assert_awaited_once()
+    await asyncio.sleep(0)
+    assert active.interrupted is True
+    assert active.interrupt_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_exit_plan_timeout_denies_and_interrupts_active_request(deps):
+    """ExitPlanMode timeout should stop the run so an unapproved plan cannot execute."""
+    settings = MagicMock()
+    settings.effective_claude_hook_timeout_seconds = 0.01
+    orchestrator = MessageOrchestrator(settings, deps)
+    orchestrator._read_latest_plan_file = MagicMock(return_value=None)
+    active = ActiveRequest(user_id=123, progress_msg=MagicMock())
+    orchestrator._active_requests[123] = active
+    msg = MagicMock()
+    msg.edit_caption = AsyncMock()
+    bot = MagicMock()
+    bot.send_message = AsyncMock(return_value=msg)
+
+    hooks = orchestrator._build_plan_mode_hook(bot=bot, chat_id=456, user_id=123)
+    hook = hooks["PreToolUse"][1].hooks[0]
+
+    result = await hook({"tool_input": {}})
+
+    output = result["hookSpecificOutput"]
+    assert output["permissionDecision"] == "deny"
+    assert "超时" in output["permissionDecisionReason"]
+    assert 123 not in orchestrator._pending_plan
+    msg.edit_caption.assert_awaited_once()
+    await asyncio.sleep(0)
+    assert active.interrupted is True
+    assert active.interrupt_event.is_set()
+
+
 async def test_restart_command_sends_sigterm(deps, tmp_path):
     """restart_command sends SIGTERM to the current process."""
     from unittest.mock import patch

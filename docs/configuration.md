@@ -68,6 +68,10 @@ CLAUDE_MAX_TURNS=10
 # Timeout for Claude operations in seconds
 CLAUDE_TIMEOUT_SECONDS=300
 
+# Timeout for interactive hooks like AUQ and plan mode in seconds
+# Leave unset to inherit CLAUDE_TIMEOUT_SECONDS; 0 or negative resolves to 24 hours
+CLAUDE_HOOK_TIMEOUT_SECONDS=
+
 # Timeout for /btw side questions in seconds
 CLAUDE_BTW_TIMEOUT_SECONDS=60
 

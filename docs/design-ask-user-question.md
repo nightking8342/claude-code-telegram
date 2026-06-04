@@ -37,7 +37,7 @@ PreToolUse hook 触发（matcher: "AskUserQuestion"）
     ↓
 发送 Telegram 消息："Claude 想问你：{question}\n[按钮列表]"
     ↓
-hook `await future`（无单独超时，由 CLAUDE_TIMEOUT_SECONDS 兜底）
+hook `await future`（由 CLAUDE_HOOK_TIMEOUT_SECONDS 控制，未配置时继承 CLAUDE_TIMEOUT_SECONDS）
     ↓
 用户点击按钮 → callback handler 设置 Future 的值
     ↓
@@ -75,6 +75,7 @@ options.hooks = {
         HookMatcher(
             matcher="AskUserQuestion",
             hooks=[async_hook_function],
+            timeout=settings.effective_claude_hook_timeout_seconds,
         )
     ]
 }
@@ -167,7 +168,7 @@ self._pending_auq: Dict[str, asyncio.Future] = {}
 Hook 流程：
 1. hook 触发 → 取 `tool_use_id` → 创建 Future → 存入 `_pending_auq[tool_use_id]`
 2. 发送 Telegram 消息（带按钮）
-3. `await future`（等用户点击，无单独超时，由 CLAUDE_TIMEOUT_SECONDS 兜底）
+3. `await future`（等用户点击，由 CLAUDE_HOOK_TIMEOUT_SECONDS 控制）
 4. 获得结果 → 清理 `_pending_auq` → 返回 hook output
 
 Callback 流程：
@@ -177,7 +178,7 @@ Callback 流程：
 
 ### R6：超时
 
-不单独设超时。Claude 的执行超时由 `CLAUDE_TIMEOUT_SECONDS`（默认 300 秒）兜底，用户可在 `.env` 里调大。如果执行超时，SDK 终止整个执行，hook 随之清理，Telegram 消息保留为"已发送但未回答"状态。
+交互型 hook 单独设置超时，避免 Claude Code 使用上游 10 分钟默认值。`CLAUDE_HOOK_TIMEOUT_SECONDS` 未配置时继承 `CLAUDE_TIMEOUT_SECONDS`；如果有效值小于等于 0，则解析为 24 小时。bot 侧按有效值等待，SDK matcher timeout 额外加 30 秒缓冲，让 bot 先移除 Telegram 按钮并向 hook 返回拒绝。hook 等待超时代表用户未响应，必须中断当前 active request，避免模型重试提问或在未批准时继续执行。
 
 ### R7：并发安全
 

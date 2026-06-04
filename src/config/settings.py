@@ -16,6 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.utils.constants import (
     DEFAULT_CLAUDE_BTW_TIMEOUT_SECONDS,
+    DEFAULT_CLAUDE_HOOK_TIMEOUT_SECONDS,
     DEFAULT_CLAUDE_MAX_COST_PER_REQUEST,
     DEFAULT_CLAUDE_MAX_COST_PER_USER,
     DEFAULT_CLAUDE_MAX_TURNS,
@@ -92,6 +93,14 @@ class Settings(BaseSettings):
         DEFAULT_CLAUDE_BTW_TIMEOUT_SECONDS,
         ge=1,
         description="Timeout in seconds for /btw side questions",
+    )
+    claude_hook_timeout_seconds: Optional[int] = Field(
+        None,
+        description=(
+            "Timeout in seconds for interactive Claude hooks "
+            "(AskUserQuestion and plan mode). Unset inherits "
+            "CLAUDE_TIMEOUT_SECONDS; 0 or negative resolves to 24 hours."
+        ),
     )
     claude_max_cost_per_user: float = Field(
         DEFAULT_CLAUDE_MAX_COST_PER_USER, description="Max cost per user"
@@ -550,6 +559,18 @@ class Settings(BaseSettings):
             if self.anthropic_api_key
             else None
         )
+
+    @property
+    def effective_claude_hook_timeout_seconds(self) -> int:
+        """Resolve interactive hook timeout, avoiding Claude Code's 10m default."""
+        timeout = (
+            self.claude_hook_timeout_seconds
+            if self.claude_hook_timeout_seconds is not None
+            else self.claude_timeout_seconds
+        )
+        if timeout <= 0:
+            return DEFAULT_CLAUDE_HOOK_TIMEOUT_SECONDS
+        return timeout
 
     @property
     def mistral_api_key_str(self) -> Optional[str]:

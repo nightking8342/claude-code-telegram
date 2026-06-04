@@ -290,6 +290,49 @@ def test_claude_btw_timeout_setting(tmp_path, monkeypatch):
     assert settings.claude_btw_timeout_seconds == 75
 
 
+def test_claude_hook_timeout_inherits_main_timeout(tmp_path, monkeypatch):
+    """Interactive hook timeout should inherit CLAUDE_TIMEOUT_SECONDS when unset."""
+    monkeypatch.delenv("CLAUDE_HOOK_TIMEOUT_SECONDS", raising=False)
+    settings = Settings(
+        telegram_bot_token="test_token",
+        telegram_bot_username="test_bot",
+        approved_directory=str(tmp_path),
+        claude_timeout_seconds=1200,
+    )
+
+    assert settings.claude_hook_timeout_seconds is None
+    assert settings.effective_claude_hook_timeout_seconds == 1200
+
+
+def test_claude_hook_timeout_uses_24h_when_main_timeout_disabled(
+    tmp_path, monkeypatch
+):
+    """CLAUDE_TIMEOUT_SECONDS=-1 should resolve hook timeout to 24 hours."""
+    monkeypatch.delenv("CLAUDE_HOOK_TIMEOUT_SECONDS", raising=False)
+    settings = Settings(
+        telegram_bot_token="test_token",
+        telegram_bot_username="test_bot",
+        approved_directory=str(tmp_path),
+        claude_timeout_seconds=-1,
+    )
+
+    assert settings.effective_claude_hook_timeout_seconds == 86400
+
+
+def test_claude_hook_timeout_setting_overrides_main_timeout(tmp_path, monkeypatch):
+    """CLAUDE_HOOK_TIMEOUT_SECONDS should override the inherited main timeout."""
+    monkeypatch.setenv("CLAUDE_HOOK_TIMEOUT_SECONDS", "1800")
+    settings = Settings(
+        telegram_bot_token="test_token",
+        telegram_bot_username="test_bot",
+        approved_directory=str(tmp_path),
+        claude_timeout_seconds=-1,
+    )
+
+    assert settings.claude_hook_timeout_seconds == 1800
+    assert settings.effective_claude_hook_timeout_seconds == 1800
+
+
 def test_project_threads_validation_requires_chat_id_in_group_mode(tmp_path):
     """Group thread mode requires project_threads_chat_id."""
     project_dir = tmp_path / "projects"
