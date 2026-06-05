@@ -1262,11 +1262,12 @@ class MessageOrchestrator:
                 )
                 return
 
-            lines = ["📋 可用 Skills:\n"]
+            lines = [f"<b>📋 可用 Skills · 共 {len(skills)} 个</b>\n"]
             for s in skills:
-                desc = f" — {html.escape(s.description)}" if s.description else ""
-                lines.append(f"<code>/skill {s.name}</code>{desc}")
-            lines.append("\n点击命令复制到剪贴板。")
+                lines.append(f"🔹 <code>/skill {s.name}</code>")
+                if s.description:
+                    lines.append(f"　　<i>{html.escape(s.description)}</i>")
+            lines.append("\n<i>点击指令即可复制到剪贴板。</i>")
             await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         else:
             # Has argument — forward to Claude as skill invocation

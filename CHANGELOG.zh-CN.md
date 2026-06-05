@@ -11,6 +11,7 @@
 - **`claude_setting_sources` 配置项**：新增 `CLAUDE_SETTING_SOURCES` 环境变量，统一控制 SDK 和 skill 发现的文件系统来源（`"user"`, `"project"`, `"local"`），取代 sdk_integration.py 中的硬编码
 - **Skill 列表跟随 setting_sources**：`/skill` 命令展示的 skill 列表现在根据 `setting_sources` 过滤，排除当前不可用的技能
 - **项目级 skill 发现**：`/skill` 命令新增项目级 `.claude/skills/` 和 `.claude/commands/` 扫描，从工作目录向上遍历到 git root
+- **`/skill` 列表可读性**：列表改为每条指令独占一行 + 🔹 锚点、描述以斜体弱化换行、标题显示技能总数；指令仍为 `<code>` 点击即可复制（含 `/skill` 前缀）
 - **健康检查诊断**：`/health` 暴露 Telegram polling 与 recovery 状态，便于识别进程存活但 polling 假死的情况
 - **Codex 指南中文化**：`AGENTS.md` 翻译为中文，并将 changelog 维护规则路由到 `.claude/rules/changelog.md`
 - **CLAUDE.md 加载**：移除手动将 CLAUDE.md 拼接进 `system_prompt` 的逻辑；加载完全委托给 CLI 的 `setting_sources=["user", "project"]` 向上目录遍历机制

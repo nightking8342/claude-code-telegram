@@ -1175,6 +1175,47 @@ async def test_bot_suffixed_command_not_forwarded(agentic_settings, deps):
         mock_claude.assert_not_called()
 
 
+async def test_agentic_skill_list_rendering(agentic_settings, deps):
+    """/skill (no args) lists each command as copyable code with 🔹 anchors.
+
+    The command stays inside <code> (tap-to-copy, /skill prefix included),
+    descriptions are italic-dimmed on their own indented line, and the
+    header reports the count.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from src.claude.skills import SkillInfo
+
+    orchestrator = MessageOrchestrator(agentic_settings, deps)
+
+    update = MagicMock()
+    update.message.text = "/skill"
+    update.message.reply_text = AsyncMock()
+    context = MagicMock()
+    context.user_data = {}
+
+    fake_skills = [
+        SkillInfo(name="alpha", description="First skill desc", source="user"),
+        SkillInfo(name="plug:beta", description="", source="plugin:plug"),
+    ]
+    with patch("src.claude.skills.discover_skills", return_value=fake_skills):
+        await orchestrator.agentic_skill(update, context)
+
+    update.message.reply_text.assert_called_once()
+    text = update.message.reply_text.call_args[0][0]
+    kwargs = update.message.reply_text.call_args[1]
+
+    assert kwargs["parse_mode"] == "HTML"
+    assert "📋 可用 Skills · 共 2 个" in text
+    # command remains a copyable <code> block with the /skill prefix
+    assert "🔹 <code>/skill alpha</code>" in text
+    assert "🔹 <code>/skill plug:beta</code>" in text
+    # description is dimmed via <i> on its own line
+    assert "<i>First skill desc</i>" in text
+    # empty description must not emit an empty italic block
+    assert "<i></i>" not in text
+
+
 # --- /btw command tests ---
 
 
