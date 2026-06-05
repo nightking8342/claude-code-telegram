@@ -1,12 +1,11 @@
 ---
 paths:
   - CHANGELOG.md
-  - CHANGELOG.zh-CN.md
 ---
 
 # CHANGELOG 维护规范
 
-修改 CHANGELOG.md、CHANGELOG.zh-CN.md 或 release notes 时遵循以下规则。
+修改 CHANGELOG.md 或 release notes 时遵循以下规则。
 
 ## 格式标准
 
