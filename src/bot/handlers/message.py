@@ -301,6 +301,11 @@ async def handle_text_message(
     message_text = update.message.text
     settings: Settings = context.bot_data["settings"]
 
+    from ..features.session_edit import handle_pending_session_edit
+
+    if await handle_pending_session_edit(update, context):
+        return
+
     # Get services
     rate_limiter: Optional[RateLimiter] = context.bot_data.get("rate_limiter")
     audit_logger: Optional[AuditLogger] = context.bot_data.get("audit_logger")

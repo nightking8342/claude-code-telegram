@@ -305,7 +305,8 @@ async def sync_threads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def new_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /new command - explicitly starts a fresh session, clearing previous context."""
+    """Handle /new command - explicitly starts a fresh session, clearing
+    previous context."""
     settings: Settings = context.bot_data["settings"]
 
     # Get current directory (default to approved directory)
@@ -379,7 +380,9 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             status_msg = await update.message.reply_text(
                 f"🔄 <b>继续 Session</b>\n\n"
                 f"Session ID: <code>{claude_session_id}</code>\n"
-                f"目录: <code>{current_dir.relative_to(settings.approved_directory)}/</code>\n\n"
+                "目录: <code>"
+                f"{current_dir.relative_to(settings.approved_directory)}"
+                "/</code>\n\n"
                 f"{'正在处理你的消息...' if prompt else '正在继续之前的对话...'}",
                 parse_mode="HTML",
             )
@@ -443,7 +446,9 @@ async def continue_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await status_msg.edit_text(
                 "❌ <b>未找到 Session</b>\n\n"
                 f"在此目录中未找到最近的 Claude session。\n"
-                f"目录: <code>{current_dir.relative_to(settings.approved_directory)}/</code>\n\n"
+                "目录: <code>"
+                f"{current_dir.relative_to(settings.approved_directory)}"
+                "/</code>\n\n"
                 f"<b>你可以:</b>\n"
                 f"• 使用 <code>/new</code> 开始新 session\n"
                 f"• 使用 <code>/status</code> 查看你的 session\n"
@@ -683,8 +688,19 @@ async def change_directory(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             if existing_session:
                 context.user_data["claude_session_id"] = existing_session.session_id
+                sdk_info = await ClaudeIntegration.get_sdk_session_info(
+                    existing_session.session_id, resolved_path
+                )
+                title = (
+                    (sdk_info or {}).get("title")
+                    or (sdk_info or {}).get("summary")
+                    or (sdk_info or {}).get("custom_title")
+                    or (sdk_info or {}).get("first_prompt")
+                    or f"Session {existing_session.session_id[:8]}"
+                )
                 resumed_session_info = (
-                    f"\n🔄 已恢复 session <code>{existing_session.session_id}</code> "
+                    f"\n🔄 已恢复 session «<b>{escape_html(title)}</b>»\n"
+                    f"ID：<code>{existing_session.session_id}</code> "
                     f"({existing_session.message_count} 条消息)"
                 )
             else:
@@ -862,7 +878,11 @@ async def session_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             cost_limit = cost_usage.get("limit", settings.claude_max_cost_per_user)
             cost_percentage = (current_cost / cost_limit) * 100 if cost_limit > 0 else 0
 
-            usage_info = f"💰 用量: ${current_cost:.2f} / ${cost_limit:.2f} ({cost_percentage:.0f}%)\n"
+            usage_info = (
+                f"💰 用量: ${current_cost:.2f}"
+                f" / ${cost_limit:.2f}"
+                f" ({cost_percentage:.0f}%)\n"
+            )
         except Exception:
             usage_info = "💰 用量: <i>无法获取</i>\n"
 
@@ -1280,7 +1300,7 @@ async def handle_provider_callback(
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /model command — show or override the model (supports per-role config)."""
-    from ...config.providers import _parse_context_suffix, _VALID_ROLES
+    from ...config.providers import _VALID_ROLES
 
     pm = context.bot_data.get("provider_manager")
     if not pm:
@@ -1369,6 +1389,7 @@ async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         user_id=user_id,
         project_path=str(current_directory),
         page=0,
+        current_session_id=context.user_data.get("claude_session_id"),
     )
     await update.message.reply_text(text, reply_markup=kb, parse_mode="HTML")
     if audit_logger:

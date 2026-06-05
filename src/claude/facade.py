@@ -332,6 +332,181 @@ class ClaudeIntegration:
             return None
 
     @staticmethod
+    async def get_sdk_session_info(
+        session_id: str, project_path: Path
+    ) -> Optional[dict]:
+        """Read session metadata through claude-agent-sdk when available."""
+
+        def _read() -> Optional[dict]:
+            try:
+                from claude_agent_sdk import get_session_info
+            except Exception:
+                return None
+
+            info = get_session_info(session_id, directory=str(project_path))
+            if info is None:
+                return None
+            data = ClaudeIntegration._sdk_info_to_dict(info)
+            data["message_count"] = ClaudeIntegration._count_jsonl_user_messages(
+                data["session_id"], Path(data.get("cwd") or project_path)
+            )
+            return data
+
+        try:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _read)
+        except Exception:
+            logger.debug(
+                "Failed to read SDK session info",
+                session_id=session_id,
+                project_path=str(project_path),
+            )
+            return None
+
+    @staticmethod
+    async def list_sdk_sessions(project_path: Path) -> list[dict]:
+        """List local Claude transcript sessions through claude-agent-sdk."""
+
+        def _read() -> list[dict]:
+            try:
+                from claude_agent_sdk import list_sessions
+            except Exception:
+                return []
+
+            sessions = list_sessions(
+                directory=str(project_path),
+                include_worktrees=True,
+            )
+            results = []
+            for info in sessions:
+                data = ClaudeIntegration._sdk_info_to_dict(info)
+                data["message_count"] = ClaudeIntegration._count_jsonl_user_messages(
+                    data["session_id"], Path(data.get("cwd") or project_path)
+                )
+                results.append(data)
+            return results
+
+        try:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _read)
+        except Exception:
+            logger.debug(
+                "Failed to list SDK sessions",
+                project_path=str(project_path),
+            )
+            return []
+
+    @staticmethod
+    def _sdk_info_to_dict(info: Any) -> dict:
+        def _ms_to_dt(value: Any) -> Optional[datetime]:
+            if value is None:
+                return None
+            try:
+                return datetime.fromtimestamp(int(value) / 1000, tz=UTC)
+            except (TypeError, ValueError, OSError):
+                return None
+
+        last_used = _ms_to_dt(getattr(info, "last_modified", None))
+        created_at = _ms_to_dt(getattr(info, "created_at", None))
+        return {
+            "session_id": getattr(info, "session_id", ""),
+            "title": getattr(info, "summary", None),
+            "summary": getattr(info, "summary", None),
+            "custom_title": getattr(info, "custom_title", None),
+            "first_prompt": getattr(info, "first_prompt", None),
+            "created_at": created_at,
+            "last_used": last_used or datetime.now(UTC),
+            "message_count": 0,
+            "git_branch": getattr(info, "git_branch", None),
+            "cwd": getattr(info, "cwd", None),
+            "tag": getattr(info, "tag", None),
+            "file_size": getattr(info, "file_size", None),
+        }
+
+    @staticmethod
+    def _count_jsonl_user_messages(session_id: str, project_path: Path) -> int:
+        import os
+
+        if not session_id:
+            return 0
+        encoded = ClaudeIntegration._encode_project_path(project_path)
+        home = Path(os.path.expanduser("~"))
+        jsonl_path = home / ".claude" / "projects" / encoded / f"{session_id}.jsonl"
+        if not jsonl_path.is_file():
+            return 0
+
+        count = 0
+        try:
+            with open(jsonl_path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if obj.get("type") == "user":
+                        count += 1
+        except Exception:
+            logger.debug(
+                "Failed to count SDK session messages",
+                session_id=session_id,
+                path=str(jsonl_path),
+            )
+            return 0
+        return count
+
+    @staticmethod
+    async def rename_sdk_session(
+        session_id: str, project_path: Path, title: str
+    ) -> bool:
+        """Rename a local Claude transcript session via claude-agent-sdk."""
+
+        def _rename() -> bool:
+            try:
+                from claude_agent_sdk import rename_session
+            except Exception:
+                return False
+
+            rename_session(session_id, title, directory=str(project_path))
+            return True
+
+        try:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _rename)
+        except Exception:
+            logger.debug(
+                "Failed to rename SDK session",
+                session_id=session_id,
+                project_path=str(project_path),
+            )
+            return False
+
+    @staticmethod
+    async def tag_sdk_session(
+        session_id: str, project_path: Path, tag: Optional[str]
+    ) -> bool:
+        """Tag or clear a local Claude transcript session via claude-agent-sdk."""
+
+        def _tag() -> bool:
+            try:
+                from claude_agent_sdk import tag_session
+            except Exception:
+                return False
+
+            tag_session(session_id, tag, directory=str(project_path))
+            return True
+
+        try:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, _tag)
+        except Exception:
+            logger.debug(
+                "Failed to tag SDK session",
+                session_id=session_id,
+                project_path=str(project_path),
+            )
+            return False
+
+    @staticmethod
     async def scan_cli_sessions(project_path: Path) -> list[dict]:
         """Scan Claude CLI transcript files for sessions in *project_path*.
 

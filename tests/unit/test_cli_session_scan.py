@@ -1,14 +1,12 @@
 """Tests for CLI session scanning and merging into /sessions browser."""
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 
 from src.bot.features.session_browser import list_sessions_view, session_detail_view
 from src.claude.facade import ClaudeIntegration
@@ -44,10 +42,13 @@ class TestScanCliSessions:
             ],
         )
 
-        with patch(
-            "src.claude.facade.ClaudeIntegration._encode_project_path",
-            return_value="test-proj",
-        ), patch("os.path.expanduser", return_value=str(tmp_path)):
+        with (
+            patch(
+                "src.claude.facade.ClaudeIntegration._encode_project_path",
+                return_value="test-proj",
+            ),
+            patch("os.path.expanduser", return_value=str(tmp_path)),
+        ):
             results = await ClaudeIntegration.scan_cli_sessions(Path("/fake"))
 
         assert len(results) == 1
@@ -61,20 +62,26 @@ class TestScanCliSessions:
         proj_dir = tmp_path / ".claude" / "projects" / "empty"
         proj_dir.mkdir(parents=True)
 
-        with patch(
-            "src.claude.facade.ClaudeIntegration._encode_project_path",
-            return_value="empty",
-        ), patch("os.path.expanduser", return_value=str(tmp_path)):
+        with (
+            patch(
+                "src.claude.facade.ClaudeIntegration._encode_project_path",
+                return_value="empty",
+            ),
+            patch("os.path.expanduser", return_value=str(tmp_path)),
+        ):
             results = await ClaudeIntegration.scan_cli_sessions(Path("/fake"))
 
         assert results == []
 
     @pytest.mark.asyncio
     async def test_scan_missing_directory(self, tmp_path):
-        with patch(
-            "src.claude.facade.ClaudeIntegration._encode_project_path",
-            return_value="no-such-dir",
-        ), patch("os.path.expanduser", return_value=str(tmp_path)):
+        with (
+            patch(
+                "src.claude.facade.ClaudeIntegration._encode_project_path",
+                return_value="no-such-dir",
+            ),
+            patch("os.path.expanduser", return_value=str(tmp_path)),
+        ):
             results = await ClaudeIntegration.scan_cli_sessions(Path("/fake"))
 
         assert results == []
@@ -86,10 +93,13 @@ class TestScanCliSessions:
         (proj_dir / "tiny-session.jsonl").write_text("{}\n")
         # File is only 3 bytes, should be skipped
 
-        with patch(
-            "src.claude.facade.ClaudeIntegration._encode_project_path",
-            return_value="tiny",
-        ), patch("os.path.expanduser", return_value=str(tmp_path)):
+        with (
+            patch(
+                "src.claude.facade.ClaudeIntegration._encode_project_path",
+                return_value="tiny",
+            ),
+            patch("os.path.expanduser", return_value=str(tmp_path)),
+        ):
             results = await ClaudeIntegration.scan_cli_sessions(Path("/fake"))
 
         assert results == []
@@ -125,10 +135,13 @@ class TestScanCliSessions:
             ],
         )
 
-        with patch(
-            "src.claude.facade.ClaudeIntegration._encode_project_path",
-            return_value="test-proj",
-        ), patch("os.path.expanduser", return_value=str(tmp_path)):
+        with (
+            patch(
+                "src.claude.facade.ClaudeIntegration._encode_project_path",
+                return_value="test-proj",
+            ),
+            patch("os.path.expanduser", return_value=str(tmp_path)),
+        ):
             results = await ClaudeIntegration.scan_cli_sessions(Path("/fake"))
 
         assert len(results) == 1
@@ -143,10 +156,13 @@ class TestScanCliSessions:
             [_make_entry("system"), _make_entry("user")],
         )
 
-        with patch(
-            "src.claude.facade.ClaudeIntegration._encode_project_path",
-            return_value="notitle",
-        ), patch("os.path.expanduser", return_value=str(tmp_path)):
+        with (
+            patch(
+                "src.claude.facade.ClaudeIntegration._encode_project_path",
+                return_value="notitle",
+            ),
+            patch("os.path.expanduser", return_value=str(tmp_path)),
+        ):
             results = await ClaudeIntegration.scan_cli_sessions(Path("/fake"))
 
         assert len(results) == 1
@@ -179,14 +195,17 @@ class TestListSessionsMerge:
             }
         ]
 
-        with patch(
-            "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
-            new_callable=AsyncMock,
-            return_value=cli_data,
-        ), patch(
-            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
-            new_callable=AsyncMock,
-            return_value="Title",
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
+                new_callable=AsyncMock,
+                return_value=cli_data,
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value="Title",
+            ),
         ):
             text, kb = await list_sessions_view(
                 storage=storage,
@@ -227,14 +246,17 @@ class TestListSessionsMerge:
             }
         ]
 
-        with patch(
-            "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
-            new_callable=AsyncMock,
-            return_value=cli_data,
-        ), patch(
-            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
-            new_callable=AsyncMock,
-            return_value="Title",
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
+                new_callable=AsyncMock,
+                return_value=cli_data,
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value="Title",
+            ),
         ):
             text, kb = await list_sessions_view(
                 storage=storage,
@@ -271,14 +293,17 @@ class TestListSessionsMerge:
             }
         ]
 
-        with patch(
-            "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
-            new_callable=AsyncMock,
-            return_value=cli_data,
-        ), patch(
-            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
-            new_callable=AsyncMock,
-            return_value="Title",
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
+                new_callable=AsyncMock,
+                return_value=cli_data,
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value="Title",
+            ),
         ):
             text, kb = await list_sessions_view(
                 storage=storage,
@@ -309,14 +334,17 @@ class TestSessionDetailCli:
             }
         ]
 
-        with patch(
-            "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
-            new_callable=AsyncMock,
-            return_value=cli_data,
-        ), patch(
-            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
-            new_callable=AsyncMock,
-            return_value="CLI Session",
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
+                new_callable=AsyncMock,
+                return_value=cli_data,
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value="CLI Session",
+            ),
         ):
             result = await session_detail_view(
                 storage=storage,
@@ -329,7 +357,7 @@ class TestSessionDetailCli:
         assert result is not None
         text, kb = result
         assert "CLI Session" in text
-        assert "CLI session" in text  # indicator text
+        assert "CLI 会话" in text  # indicator text
         buttons = [b for row in kb.inline_keyboard for b in row]
         cbs = [b.callback_data for b in buttons]
         assert "sessions:resume:cli-sid" in cbs
@@ -383,9 +411,7 @@ class TestOwnershipCheckCli:
             new_callable=AsyncMock,
             return_value=cli_data,
         ):
-            result = await _check_session_ownership(
-                storage, 42, "cli-owned", "/proj"
-            )
+            result = await _check_session_ownership(storage, 42, "cli-owned", "/proj")
 
         assert result == "owned"
 
@@ -404,8 +430,6 @@ class TestOwnershipCheckCli:
             new_callable=AsyncMock,
             return_value=[],
         ):
-            result = await _check_session_ownership(
-                storage, 42, "no-such-sid", "/proj"
-            )
+            result = await _check_session_ownership(storage, 42, "no-such-sid", "/proj")
 
         assert result == "missing"

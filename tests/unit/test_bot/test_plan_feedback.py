@@ -54,7 +54,9 @@ async def test_plan_feedback_text_resolves_future_and_clears_priority():
     update.message.text = "Please simplify the implementation plan."
     update.message.reply_text = AsyncMock()
 
-    await orchestrator.agentic_text(update, MagicMock())
+    ctx = MagicMock()
+    ctx.user_data = {}
+    await orchestrator.agentic_text(update, ctx)
 
     assert future.result() == {
         "action": "feedback",
@@ -85,7 +87,9 @@ async def test_plan_feedback_text_switches_progress_message():
     update.message.message_id = 456
     update.message.reply_text = AsyncMock(return_value=new_progress)
 
-    await orchestrator.agentic_text(update, MagicMock())
+    ctx = MagicMock()
+    ctx.user_data = {}
+    await orchestrator.agentic_text(update, ctx)
 
     assert await active.current_progress_msg() is new_progress
     assert await active.all_progress_messages() == [old_progress, new_progress]

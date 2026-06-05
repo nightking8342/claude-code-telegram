@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/model` command / 模型命令**：查看和切换活跃模型
 - **Provider profiles / 提供方配置**：`/provider` 命令查看和管理模型提供方配置；提供方设置覆盖层以 flag 层传入 SDK
 - **`/sessions` browser / 会话浏览器**：完整的会话管理 UI —— 分页列表、详情视图、恢复、导出（MD/JSON），跨用户隔离；集成 SQLite 和 CLI 本地 JSONL 存储
+- **Session rename & tags / 会话重命名与标签**：`/sessions` 详情视图新增「重命名」「设置标签」「清除标签」，自定义标题与标签通过 claude-agent-sdk 持久化
 - **AskUserQuestion → Telegram buttons / 按钮**：Claude 的 `AskUserQuestion` 工具调用通过 PreToolUse hook 拦截，渲染为 Telegram 内联键盘；支持自由文本"Other"输入
 - **Chinese localization / 中文本地化**：所有面向用户的机器人字符串翻译为中文，包括命令描述、认证消息和重启通知
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session export redesigned / 会话导出重做**：HTML 导出重写为聊天气泡样式的对话记录视图
 - **Polling resilience / 轮询韧性**：错误分类、重连阶梯（指数退避）、长连接活跃度看门狗
 - **Session resume notifications / 会话恢复通知**：自动恢复会话时，用户可见消息数和会话时长提示
+- **SDK-based session titles / 基于 SDK 的会话标题**：会话列表与恢复提示优先从 claude-agent-sdk 读取标题/摘要/自定义标题（回退到本地 transcript）；BTW 旁路会话从普通导出与恢复流程中隐藏
 - **30-min safety timeout / 30 分钟安全超时**：防止 `CLAUDE_TIMEOUT_SECONDS` 未设置时 Claude 会话无限运行
 - **CI: pre-commit hooks**：提交时自动 lint（`.pre-commit-config.yaml`），lint 拆分为独立 CI job
 - **`claude-agent-sdk` upgraded / 升级**到 ^0.2.87

@@ -34,6 +34,7 @@ from telegram.ext import (
 )
 
 from ..claude.btw import BtwContextSnapshot
+from ..claude.facade import ClaudeIntegration
 from ..claude.sdk_integration import StreamUpdate
 from ..config.settings import Settings
 from ..projects import PrivateTopicsUnavailableError
@@ -1027,17 +1028,39 @@ class MessageOrchestrator:
             claude_integration: The ClaudeIntegration facade instance.
             session_meta: Optional ClaudeSession with last_used, message_count.
         """
-        title = await claude_integration.read_session_title(session_id, project_path)
+        sdk_info = await ClaudeIntegration.get_sdk_session_info(
+            session_id, Path(project_path)
+        )
+        title = None
+        if sdk_info:
+            title = (
+                sdk_info.get("title")
+                or sdk_info.get("summary")
+                or sdk_info.get("custom_title")
+                or sdk_info.get("first_prompt")
+            )
+        if not title:
+            title = await claude_integration.read_session_title(
+                session_id, project_path
+            )
         dir_name = project_path.name or str(project_path)
 
         meta_parts: List[str] = []
-        if session_meta:
-            rel = self._relative_time(getattr(session_meta, "last_used", None))
-            if rel:
-                meta_parts.append(rel)
-            msg_count = getattr(session_meta, "message_count", 0)
-            if msg_count:
-                meta_parts.append(f"{msg_count}条")
+        last_used = (
+            sdk_info.get("last_used")
+            if sdk_info and sdk_info.get("last_used") is not None
+            else getattr(session_meta, "last_used", None)
+        )
+        rel = self._relative_time(last_used)
+        if rel:
+            meta_parts.append(rel)
+        msg_count = (
+            sdk_info.get("message_count")
+            if sdk_info and sdk_info.get("message_count") is not None
+            else getattr(session_meta, "message_count", 0)
+        )
+        if msg_count:
+            meta_parts.append(f"{msg_count}条")
 
         if title:
             line2_parts = [session_id, dir_name] + meta_parts
@@ -1733,6 +1756,11 @@ class MessageOrchestrator:
         user_id = update.effective_user.id
         message_text = text if text is not None else update.message.text
 
+        from .features.session_edit import handle_pending_session_edit
+
+        if text is None and await handle_pending_session_edit(update, context):
+            return
+
         # Check if user is answering an "Other" question from AskUserQuestion
         waiting = self._auq_waiting_other.pop(user_id, None)
         if waiting:
@@ -1751,9 +1779,7 @@ class MessageOrchestrator:
                 if auq_meta:
                     q_text = auq_meta["question_text"]
                     hdr = auq_meta.get("header", "")
-                    hdr_line = (
-                        f"<b>{escape_html(hdr)}</b>\n" if hdr else ""
-                    )
+                    hdr_line = f"<b>{escape_html(hdr)}</b>\n" if hdr else ""
                     opts = auq_meta.get("options", [])
                     lines = [
                         f"🤔 {hdr_line}<b>Claude 想问你：</b>\n"
@@ -1766,9 +1792,7 @@ class MessageOrchestrator:
                         if desc:
                             entry += f"\n  {escape_html(desc)}"
                         lines.append(entry)
-                    lines.append(
-                        f"\n📝 <b>自由输入：{escape_html(message_text)}</b>"
-                    )
+                    lines.append(f"\n📝 <b>自由输入：{escape_html(message_text)}</b>")
                     try:
                         await auq_meta["msg"].edit_text(
                             "\n".join(lines),
@@ -1789,7 +1813,13 @@ class MessageOrchestrator:
                 active_request = self._active_requests.get(user_id)
                 if active_request is not None:
                     stop_kb = InlineKeyboardMarkup(
-                        [[InlineKeyboardButton("停止", callback_data=f"stop:{user_id}")]]
+                        [
+                            [
+                                InlineKeyboardButton(
+                                    "停止", callback_data=f"stop:{user_id}"
+                                )
+                            ]
+                        ]
                     )
                     try:
                         progress_msg = await update.message.reply_text(
@@ -2976,9 +3006,7 @@ class MessageOrchestrator:
 
             # Fallback: check if tool_input has inline plan content
             tool_input = (
-                hook_input.get("tool_input", {})
-                if isinstance(hook_input, dict)
-                else {}
+                hook_input.get("tool_input", {}) if isinstance(hook_input, dict) else {}
             )
             plan = tool_input.get("planContent") or tool_input.get("plan")
             if plan:
@@ -3562,8 +3590,7 @@ class MessageOrchestrator:
             hdr = auq_meta.get("header", "")
             hdr_line = f"<b>{escape_html(hdr)}</b>\n" if hdr else ""
             lines = [
-                f"🤔 {hdr_line}<b>Claude 想问你：</b>\n"
-                f"{escape_html(q_text)}\n"
+                f"🤔 {hdr_line}<b>Claude 想问你：</b>\n" f"{escape_html(q_text)}\n"
             ]
             for i, opt in enumerate(options[:4]):
                 lbl = opt.get("label", f"选项 {i + 1}")
@@ -3698,8 +3725,7 @@ class MessageOrchestrator:
             hdr = auq_meta.get("header", "")
             hdr_line = f"<b>{escape_html(hdr)}</b>\n" if hdr else ""
             lines = [
-                f"🤔 {hdr_line}<b>Claude 想问你：</b>\n"
-                f"{escape_html(q_text)}\n"
+                f"🤔 {hdr_line}<b>Claude 想问你：</b>\n" f"{escape_html(q_text)}\n"
             ]
             for i, opt in enumerate(options[:4]):
                 lbl = opt.get("label", f"选项 {i + 1}")

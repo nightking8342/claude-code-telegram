@@ -179,8 +179,7 @@ class TestDetailCallback:
         # Audit event must have been logged
         audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("action") == "sessions_cross_user_denied"
-            for c in audit_calls
+            c.kwargs.get("action") == "sessions_cross_user_denied" for c in audit_calls
         )
 
     @pytest.mark.asyncio
@@ -232,8 +231,7 @@ class TestViewHtmlCallback:
         # Audit event must have been logged
         audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("action") == "sessions_cross_user_denied"
-            for c in audit_calls
+            c.kwargs.get("action") == "sessions_cross_user_denied" for c in audit_calls
         )
 
     @pytest.mark.asyncio
@@ -269,7 +267,9 @@ class TestResumeCallback:
         assert context.user_data["claude_session_id"] == "resume-test-sid"
         assert context.user_data["force_new_session"] is False
         query.message.reply_text.assert_called_once()
-        assert "Resume me" in query.message.reply_text.call_args.args[0]
+        reply = query.message.reply_text.call_args.args[0]
+        assert "Resume me" in reply
+        assert "resume-test-sid" in reply
 
     @pytest.mark.asyncio
     async def test_resume_cross_user_denied(self, storage):
@@ -281,9 +281,25 @@ class TestResumeCallback:
         query.answer.assert_called()
         audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("action") == "sessions_cross_user_denied"
-            for c in audit_calls
+            c.kwargs.get("action") == "sessions_cross_user_denied" for c in audit_calls
         )
+
+
+class TestSessionEditCallback:
+    @pytest.mark.asyncio
+    async def test_rename_sets_pending_edit_state(self, storage):
+        await _save(storage, 42, PROJ, "rename-sid")
+        query = _fake_query(42, "sessions:rename:rename-sid")
+        context = _fake_context(storage, 42)
+
+        await handle_sessions_callback(query, "rename:rename-sid", context)
+
+        assert context.user_data["session_edit_action"] == {
+            "action": "rename",
+            "session_id": "rename-sid",
+            "project_path": PROJ,
+        }
+        query.message.reply_text.assert_called_once()
 
 
 class TestExportCallback:
@@ -468,6 +484,67 @@ class TestRuntimeStorageWiring:
         query.edit_message_text.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_list_against_real_repo_uses_oldest_db_prompt_fallback(
+        self, repo_storage
+    ):
+        from src.storage.models import MessageModel
+        from src.storage.repositories import MessageRepository
+
+        repo, save = repo_storage
+        proj = _norm("/proj")
+        await save(42, proj, "s0")
+        message_repo = MessageRepository(repo.db)
+        now = datetime.now(UTC)
+        await message_repo.save_message(
+            MessageModel(
+                session_id="s0",
+                user_id=42,
+                timestamp=now - timedelta(minutes=2),
+                prompt="oldest title",
+            )
+        )
+        await message_repo.save_message(
+            MessageModel(
+                session_id="s0",
+                user_id=42,
+                timestamp=now,
+                prompt="latest title",
+            )
+        )
+
+        query = _fake_query(42, "sessions:list:0")
+        context = _fake_context(repo, 42, current_directory=proj)
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.list_sdk_sessions",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.get_sdk_session_info",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            await handle_sessions_callback(query, "list:0", context)
+
+        kb = query.edit_message_text.call_args.kwargs["reply_markup"]
+        label = kb.inline_keyboard[0][0].text
+        assert "oldest title" in label
+        assert "latest title" not in label
+        assert "CLI" not in label
+
+    @pytest.mark.asyncio
     async def test_detail_cross_user_denied_against_real_repo(self, repo_storage):
         repo, save = repo_storage
         proj = _norm("/proj")
@@ -478,6 +555,5 @@ class TestRuntimeStorageWiring:
         query.answer.assert_called()
         audit_calls = context.bot_data["audit_logger"].log_session_event.call_args_list
         assert any(
-            c.kwargs.get("action") == "sessions_cross_user_denied"
-            for c in audit_calls
+            c.kwargs.get("action") == "sessions_cross_user_denied" for c in audit_calls
         )

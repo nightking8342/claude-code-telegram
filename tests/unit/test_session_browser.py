@@ -102,7 +102,136 @@ class TestListSessionsView:
         # 3 session buttons, no pagination row
         assert len(kb.inline_keyboard) == 3
         assert all(len(row) == 1 for row in kb.inline_keyboard)
-        assert kb.inline_keyboard[0][0].callback_data == "sessions:detail:s0"
+        assert {row[0].callback_data for row in kb.inline_keyboard} == {
+            "sessions:detail:s0",
+            "sessions:detail:s1",
+            "sessions:detail:s2",
+        }
+
+    @pytest.mark.asyncio
+    async def test_db_session_uses_sdk_title_and_not_cli_label(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=1)
+        storage.get_user_sessions = AsyncMock(return_value=[_fake_session("s0")])
+
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.list_sdk_sessions",
+            new_callable=AsyncMock,
+            return_value=[
+                {
+                    "session_id": "s0",
+                    "title": "SDK summary title",
+                    "summary": "SDK summary title",
+                    "custom_title": None,
+                    "first_prompt": "first prompt",
+                    "last_used": datetime.now(UTC),
+                    "message_count": 0,
+                }
+            ],
+        ):
+            _, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=0
+            )
+
+        text = kb.inline_keyboard[0][0].text
+        assert "SDK summary title" in text
+        assert "first prompt" not in text
+        assert "CLI" not in text
+
+    @pytest.mark.asyncio
+    async def test_db_session_uses_local_transcript_message_count(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=1)
+        storage.get_user_sessions = AsyncMock(
+            return_value=[_fake_session("s0", msgs=99)]
+        )
+
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.list_sdk_sessions",
+            new_callable=AsyncMock,
+            return_value=[
+                {
+                    "session_id": "s0",
+                    "title": "Count title",
+                    "last_used": datetime.now(UTC),
+                    "message_count": 2,
+                }
+            ],
+        ):
+            _, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=0
+            )
+
+        text = kb.inline_keyboard[0][0].text
+        assert "Count title" in text
+        assert "2" in text
+        assert "99" not in text
+
+    @pytest.mark.asyncio
+    async def test_db_session_fallback_uses_sdk_title_over_first_prompt(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=1)
+        storage.get_user_sessions = AsyncMock(return_value=[_fake_session("s0")])
+
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.list_sdk_sessions",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.scan_cli_sessions",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.get_sdk_session_info",
+                new_callable=AsyncMock,
+                return_value={
+                    "session_id": "s0",
+                    "title": "latest prompt",
+                    "summary": "latest prompt",
+                    "custom_title": None,
+                    "first_prompt": "oldest prompt",
+                },
+            ),
+        ):
+            _, kb = await list_sessions_view(
+                storage=storage, user_id=42, project_path="/proj", page=0
+            )
+
+        text = kb.inline_keyboard[0][0].text
+        assert "latest prompt" in text
+        assert "oldest prompt" not in text
+        assert "CLI" not in text
+
+    @pytest.mark.asyncio
+    async def test_marks_current_session_in_list(self):
+        storage = AsyncMock()
+        storage.count_user_sessions = AsyncMock(return_value=1)
+        storage.get_user_sessions = AsyncMock(return_value=[_fake_session("s0")])
+
+        with (
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.list_sdk_sessions",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+                new_callable=AsyncMock,
+                return_value="title",
+            ),
+        ):
+            _, kb = await list_sessions_view(
+                storage=storage,
+                user_id=42,
+                project_path="/proj",
+                page=0,
+                current_session_id="s0",
+            )
+
+        assert kb.inline_keyboard[0][0].text.startswith("▶ ")
 
     @pytest.mark.asyncio
     async def test_filters_recorded_btw_fork_sessions(self):
@@ -256,7 +385,46 @@ class TestSessionDetailView:
         assert "sessions:resume:abc-123" in cbs
         assert "sessions:export:abc-123:md" in cbs
         assert "sessions:export:abc-123:json" in cbs
+        assert "sessions:rename:abc-123" in cbs
+        assert "sessions:tag:abc-123" in cbs
+        assert "sessions:cleartag:abc-123" in cbs
         assert "sessions:back:0" in cbs
+
+    @pytest.mark.asyncio
+    async def test_renders_sdk_metadata(self):
+        storage = AsyncMock()
+        storage.load_session = AsyncMock(return_value=_fake_session("abc-123", msgs=23))
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.get_sdk_session_info",
+            new_callable=AsyncMock,
+            return_value={
+                "custom_title": None,
+                "title": "SDK title",
+                "summary": "SDK title",
+                "first_prompt": "first",
+                "cwd": "/proj",
+                "git_branch": "main",
+                "tag": "work",
+                "file_size": 123,
+                "message_count": 42,
+            },
+        ):
+            text, _ = await session_detail_view(
+                storage=storage,
+                user_id=42,
+                session_id="abc-123",
+                back_page=0,
+            )
+
+        assert "SDK title" in text
+        assert "消息数 42" in text
+        assert "title: <code>SDK title</code>" in text
+        assert "summary: <code>SDK title</code>" in text
+        assert "first_prompt: <code>first</code>" in text
+        assert "message_count: <code>42</code>" in text
+        assert "git_branch: <code>main</code>" in text
+        assert "tag: <code>work</code>" in text
+        assert "file_size: <code>123 B</code>" in text
 
     @pytest.mark.asyncio
     async def test_back_button_carries_page_number(self):

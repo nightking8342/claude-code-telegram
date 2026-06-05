@@ -74,9 +74,12 @@ async def _check_session_ownership(
     # Check CLI sessions
     if project_path:
         try:
-            cli_sessions = await ClaudeIntegration.scan_cli_sessions(
-                Path(project_path)
+            sdk_info = await ClaudeIntegration.get_sdk_session_info(
+                session_id, Path(project_path)
             )
+            if sdk_info:
+                return "owned"
+            cli_sessions = await ClaudeIntegration.scan_cli_sessions(Path(project_path))
             for cs in cli_sessions:
                 if cs["session_id"] == session_id:
                     return "owned"
@@ -90,6 +93,19 @@ async def _resolve_title_for_handler(storage, project_path, session_id: str) -> 
 
     Resolves display title: CLI aiTitle → first prompt → session id-based.
     """
+    sdk_info = await ClaudeIntegration.get_sdk_session_info(
+        session_id, Path(str(project_path))
+    )
+    if sdk_info:
+        title = (
+            sdk_info.get("title")
+            or sdk_info.get("summary")
+            or sdk_info.get("custom_title")
+            or sdk_info.get("first_prompt")
+        )
+        if title:
+            return title
+
     title = await ClaudeIntegration.read_session_title(
         session_id, Path(str(project_path))
     )
@@ -192,8 +208,7 @@ async def handle_callback_query(
         except Exception:
             # If we can't edit the message, send a new one
             await query.message.reply_text(
-                "❌ <b>操作处理出错</b>\n\n"
-                "处理请求时发生错误。",
+                "❌ <b>操作处理出错</b>\n\n" "处理请求时发生错误。",
                 parse_mode="HTML",
             )
 
@@ -245,8 +260,7 @@ async def handle_cd_callback(
 
         if project_root and not _is_within_root(new_path, project_root):
             await query.edit_message_text(
-                "❌ <b>访问被拒绝</b>\n\n"
-                "在线程模式下，导航仅限于当前项目根目录。",
+                "❌ <b>访问被拒绝</b>\n\n" "在线程模式下，导航仅限于当前项目根目录。",
                 parse_mode="HTML",
             )
             return
@@ -270,15 +284,24 @@ async def handle_cd_callback(
             )
             if existing_session:
                 context.user_data["claude_session_id"] = existing_session.session_id
+                sdk_info = await ClaudeIntegration.get_sdk_session_info(
+                    existing_session.session_id, new_path
+                )
+                title = (
+                    (sdk_info or {}).get("title")
+                    or (sdk_info or {}).get("summary")
+                    or (sdk_info or {}).get("custom_title")
+                    or (sdk_info or {}).get("first_prompt")
+                    or f"Session {existing_session.session_id[:8]}"
+                )
                 resumed_session_info = (
-                    f"\n🔄 已恢复 session <code>{escape_html(existing_session.session_id)}</code> "
+                    f"\n🔄 已恢复 session «<b>{escape_html(title)}</b>»\n"
+                    f"ID：<code>{escape_html(existing_session.session_id)}</code> "
                     f"({existing_session.message_count} 条消息)"
                 )
             else:
                 context.user_data["claude_session_id"] = None
-                resumed_session_info = (
-                    "\n🆕 无现有 session，发送消息即可创建新会话。"
-                )
+                resumed_session_info = "\n🆕 无现有 session，发送消息即可创建新会话。"
         else:
             context.user_data["claude_session_id"] = None
             resumed_session_info = "\n🆕 发送消息即可创建新 session。"
@@ -355,8 +378,7 @@ async def handle_action_callback(
         await handler(query, context)
     else:
         await query.edit_message_text(
-            f"❌ <b>未知操作：{escape_html(action_type)}</b>\n\n"
-            "此操作尚未实现。",
+            f"❌ <b>未知操作：{escape_html(action_type)}</b>\n\n" "此操作尚未实现。",
             parse_mode="HTML",
         )
 
@@ -435,8 +457,7 @@ async def _handle_show_projects_action(
             projects = registry.list_enabled()
             if not projects:
                 await query.edit_message_text(
-                    "📁 <b>未找到项目</b>\n\n"
-                    "项目配置中没有已启用的项目。",
+                    "📁 <b>未找到项目</b>\n\n" "项目配置中没有已启用的项目。",
                     parse_mode="HTML",
                 )
                 return
@@ -489,9 +510,7 @@ async def _handle_show_projects_action(
         keyboard.append(
             [
                 InlineKeyboardButton("🏠 根目录", callback_data="cd:/"),
-                InlineKeyboardButton(
-                    "🔄 刷新", callback_data="action:show_projects"
-                ),
+                InlineKeyboardButton("🔄 刷新", callback_data="action:show_projects"),
             ]
         )
 
@@ -501,9 +520,7 @@ async def _handle_show_projects_action(
         )
 
         await query.edit_message_text(
-            f"📁 <b>可用项目</b>\n\n"
-            f"{project_list}\n\n"
-            f"点击项目即可跳转：",
+            f"📁 <b>可用项目</b>\n\n" f"{project_list}\n\n" f"点击项目即可跳转：",
             parse_mode="HTML",
             reply_markup=reply_markup,
         )
@@ -527,17 +544,11 @@ async def _handle_new_session_action(query, context: ContextTypes.DEFAULT_TYPE) 
 
     keyboard = [
         [
-            InlineKeyboardButton(
-                "📝 开始编码", callback_data="action:start_coding"
-            ),
-            InlineKeyboardButton(
-                "📁 切换项目", callback_data="action:show_projects"
-            ),
+            InlineKeyboardButton("📝 开始编码", callback_data="action:start_coding"),
+            InlineKeyboardButton("📁 切换项目", callback_data="action:show_projects"),
         ],
         [
-            InlineKeyboardButton(
-                "📋 快捷操作", callback_data="action:quick_actions"
-            ),
+            InlineKeyboardButton("📋 快捷操作", callback_data="action:quick_actions"),
             InlineKeyboardButton("❓ 帮助", callback_data="action:help"),
         ],
     ]
@@ -596,9 +607,7 @@ async def _handle_end_session_action(query, context: ContextTypes.DEFAULT_TYPE) 
     keyboard = [
         [
             InlineKeyboardButton("🆕 新建 session", callback_data="action:new_session"),
-            InlineKeyboardButton(
-                "📁 切换项目", callback_data="action:show_projects"
-            ),
+            InlineKeyboardButton("📁 切换项目", callback_data="action:show_projects"),
         ],
         [
             InlineKeyboardButton("📊 状态", callback_data="action:status"),
@@ -636,8 +645,7 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         if not claude_integration:
             await query.edit_message_text(
-                "❌ <b>Claude 集成不可用</b>\n\n"
-                "Claude 集成未正确配置。",
+                "❌ <b>Claude 集成不可用</b>\n\n" "Claude 集成未正确配置。",
                 parse_mode="HTML",
             )
             return
@@ -664,8 +672,7 @@ async def _handle_continue_action(query, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             # No session in context, try to find the most recent session
             await query.edit_message_text(
-                "🔍 <b>查找最近的 Session</b>\n\n"
-                "正在搜索此目录下最近的 session...",
+                "🔍 <b>查找最近的 Session</b>\n\n" "正在搜索此目录下最近的 session...",
                 parse_mode="HTML",
             )
 
@@ -973,8 +980,7 @@ async def handle_quick_action_callback(
 
     if not quick_actions:
         await query.edit_message_text(
-            "❌ <b>快捷操作不可用</b>\n\n"
-            "快捷操作功能不可用。",
+            "❌ <b>快捷操作不可用</b>\n\n" "快捷操作功能不可用。",
             parse_mode="HTML",
         )
         return
@@ -983,8 +989,7 @@ async def handle_quick_action_callback(
     claude_integration: ClaudeIntegration = context.bot_data.get("claude_integration")
     if not claude_integration:
         await query.edit_message_text(
-            "❌ <b>Claude 集成不可用</b>\n\n"
-            "Claude 集成未正确配置。",
+            "❌ <b>Claude 集成不可用</b>\n\n" "Claude 集成未正确配置。",
             parse_mode="HTML",
         )
         return
@@ -1022,9 +1027,7 @@ async def handle_quick_action_callback(
             # Format and send the response
             response_text = escape_html(claude_response.content)
             if len(response_text) > 4000:
-                response_text = (
-                    response_text[:4000] + "...\n\n<i>（响应已截断）</i>"
-                )
+                response_text = response_text[:4000] + "...\n\n<i>（响应已截断）</i>"
 
             await query.message.reply_text(
                 f"✅ <b>{action.icon} {escape_html(action.name)} 完成</b>\n\n{response_text}",
@@ -1057,8 +1060,7 @@ async def handle_followup_callback(
 
     if not conversation_enhancer:
         await query.edit_message_text(
-            "❌ <b>后续建议不可用</b>\n\n"
-            "对话增强功能不可用。",
+            "❌ <b>后续建议不可用</b>\n\n" "对话增强功能不可用。",
             parse_mode="HTML",
         )
         return
@@ -1092,8 +1094,7 @@ async def handle_followup_callback(
         )
 
         await query.edit_message_text(
-            "❌ <b>处理后续建议出错</b>\n\n"
-            "处理后续建议时发生错误。",
+            "❌ <b>处理后续建议出错</b>\n\n" "处理后续建议时发生错误。",
             parse_mode="HTML",
         )
 
@@ -1187,8 +1188,7 @@ async def handle_git_callback(
 
     if not features or not features.is_enabled("git"):
         await query.edit_message_text(
-            "❌ <b>Git 集成已禁用</b>\n\n"
-            "Git 集成功能未启用。",
+            "❌ <b>Git 集成已禁用</b>\n\n" "Git 集成功能未启用。",
             parse_mode="HTML",
         )
         return
@@ -1201,8 +1201,7 @@ async def handle_git_callback(
         git_integration = features.get_git_integration()
         if not git_integration:
             await query.edit_message_text(
-                "❌ <b>Git 集成不可用</b>\n\n"
-                "Git 集成服务不可用。",
+                "❌ <b>Git 集成不可用</b>\n\n" "Git 集成服务不可用。",
                 parse_mode="HTML",
             )
             return
@@ -1245,9 +1244,7 @@ async def handle_git_callback(
                 # Telegram's 4096-char message limit)
                 max_length = 3500
                 if len(clean_diff) > max_length:
-                    clean_diff = (
-                        clean_diff[:max_length] + "\n\n...输出已截断..."
-                    )
+                    clean_diff = clean_diff[:max_length] + "\n\n...输出已截断..."
 
                 escaped_diff = escape_html(clean_diff)
                 diff_message = (
@@ -1327,11 +1324,21 @@ async def handle_export_callback(
         )
         return
 
+    from ..features.session_export import ExportFormat
+
+    try:
+        export_enum = ExportFormat(export_format)
+    except ValueError:
+        await query.edit_message_text(
+            f"未知的导出格式：<code>{escape_html(export_format)}</code>",
+            parse_mode="HTML",
+        )
+        return
+
     session_exporter = features.get_session_export() if features else None
     if not session_exporter:
         await query.edit_message_text(
-            "❌ <b>导出不可用</b>\n\n"
-            "Session 导出服务不可用。",
+            "❌ <b>导出不可用</b>\n\n" "Session 导出服务不可用。",
             parse_mode="HTML",
         )
         return
@@ -1354,8 +1361,15 @@ async def handle_export_callback(
         )
 
         # Export session
+        settings: Settings = context.bot_data["settings"]
+        current_directory = context.user_data.get(
+            "current_directory", settings.approved_directory
+        )
         exported_session = await session_exporter.export_session(
-            claude_session_id, export_format
+            user_id=user_id,
+            session_id=claude_session_id,
+            format=export_enum,
+            project_path=str(current_directory),
         )
 
         # Send the exported file
@@ -1369,7 +1383,7 @@ async def handle_export_callback(
             filename=exported_session.filename,
             caption=(
                 f"📤 <b>Session 导出完成</b>\n\n"
-                f"格式：{escape_html(exported_session.format.upper())}\n"
+                f"格式：{escape_html(exported_session.format.value.upper())}\n"
                 f"大小：{exported_session.size_bytes:,} 字节\n"
                 f"创建时间：{exported_session.created_at.strftime('%Y-%m-%d %H:%M:%S')}"
             ),
@@ -1442,6 +1456,7 @@ async def handle_sessions_callback(
             user_id=user_id,
             project_path=str(current_directory),
             page=page,
+            current_session_id=context.user_data.get("claude_session_id"),
         )
         await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
         if audit_logger:
@@ -1467,9 +1482,7 @@ async def handle_sessions_callback(
             # Distinguish "cross-user" from "missing" — the session row may
             # exist but be owned by a different user.
             row_exists = False
-            db = getattr(storage, "db", None) or getattr(
-                storage, "db_manager", None
-            )
+            db = getattr(storage, "db", None) or getattr(storage, "db_manager", None)
             if db is not None:
                 async with db.get_connection() as conn:
                     cursor = await conn.execute(
@@ -1497,6 +1510,7 @@ async def handle_sessions_callback(
                 user_id=user_id,
                 project_path=str(current_directory),
                 page=0,
+                current_session_id=context.user_data.get("claude_session_id"),
             )
             await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
             return
@@ -1512,13 +1526,69 @@ async def handle_sessions_callback(
             )
         return
 
+    if sub_action in ("rename", "tag", "cleartag"):
+        session_id = rest
+        ownership = await _check_session_ownership(
+            storage, user_id, session_id, str(current_directory)
+        )
+        if ownership == "btw_fork":
+            await query.answer("BTW 旁路会话已隐藏", show_alert=True)
+            return
+        if ownership == "cross_user":
+            await query.answer("无权访问该 session", show_alert=True)
+            return
+        if ownership == "missing":
+            await query.answer("session 不存在或已删除")
+            return
+
+        if sub_action == "cleartag":
+            ok = await ClaudeIntegration.tag_sdk_session(
+                session_id,
+                Path(str(current_directory)),
+                None,
+            )
+            if ok:
+                await query.message.reply_text("session 标签已清除。")
+                if audit_logger:
+                    await audit_logger.log_session_event(
+                        user_id=user_id,
+                        action="sessions_clear_tag",
+                        success=True,
+                        details={"session_id": session_id},
+                    )
+            else:
+                await query.message.reply_text(
+                    "清除标签失败，本地 transcript 可能不存在。"
+                )
+            return
+
+        context.user_data["session_edit_action"] = {
+            "action": sub_action,
+            "session_id": session_id,
+            "project_path": str(current_directory),
+        }
+        prompt = (
+            "请发送新的 session 标题。发送 /cancel 可取消。"
+            if sub_action == "rename"
+            else "请发送 session 标签。发送 /cancel 可取消。"
+        )
+        await query.message.reply_text(prompt)
+        if audit_logger:
+            await audit_logger.log_session_event(
+                user_id=user_id,
+                action=f"sessions_{sub_action}_prompt",
+                success=True,
+                details={"session_id": session_id},
+            )
+        return
+
     if sub_action == "view":
         session_id = rest
         ownership = await _check_session_ownership(
             storage, user_id, session_id, str(current_directory)
         )
         if ownership == "btw_fork":
-            await query.answer("BTW side session is hidden", show_alert=True)
+            await query.answer("BTW 旁路会话已隐藏", show_alert=True)
             return
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
@@ -1551,6 +1621,7 @@ async def handle_sessions_callback(
                 user_id=user_id,
                 session_id=session_id,
                 format=ExportFormat.HTML,
+                project_path=str(current_directory),
             )
         except Exception as e:
             logger.error(
@@ -1590,7 +1661,7 @@ async def handle_sessions_callback(
             storage, user_id, session_id, str(current_directory)
         )
         if ownership == "btw_fork":
-            await query.answer("BTW side session cannot be resumed", show_alert=True)
+            await query.answer("BTW 旁路会话不能恢复", show_alert=True)
             return
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
@@ -1610,7 +1681,9 @@ async def handle_sessions_callback(
         context.user_data["claude_session_id"] = session_id
         context.user_data["force_new_session"] = False
         await query.message.reply_text(
-            f"✅ 已切到 session «<b>{escape_html(title)}</b>»，发消息即继续。",
+            f"✅ 已切到 session «<b>{escape_html(title)}</b>»。\n"
+            f"ID：<code>{escape_html(session_id)}</code>\n"
+            "发消息即继续。",
             parse_mode="HTML",
         )
         if audit_logger:
@@ -1633,7 +1706,7 @@ async def handle_sessions_callback(
             storage, user_id, session_id, str(current_directory)
         )
         if ownership == "btw_fork":
-            await query.answer("BTW side session cannot be exported", show_alert=True)
+            await query.answer("BTW 旁路会话不能导出", show_alert=True)
             return
         if ownership == "cross_user":
             await query.answer("无权访问该 session", show_alert=True)
@@ -1675,6 +1748,7 @@ async def handle_sessions_callback(
                 user_id=user_id,
                 session_id=session_id,
                 format=export_format,
+                project_path=str(current_directory),
             )
         except Exception as e:
             logger.error(

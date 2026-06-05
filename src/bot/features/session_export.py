@@ -44,13 +44,79 @@ def _extract_text(content) -> str:
     return ""
 
 
+def _coerce_datetime(value) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    return datetime.now(UTC)
+
+
+def _iso_datetime(value) -> str:
+    return _coerce_datetime(value).isoformat()
+
+
+def _read_sdk_session(session_id: str, directory: str | None = None):
+    """Read session metadata and messages through claude-agent-sdk."""
+
+    try:
+        from claude_agent_sdk import get_session_info, get_session_messages
+    except Exception:
+        return None, []
+
+    try:
+        info = get_session_info(session_id, directory=directory)
+        if info is None:
+            return None, []
+
+        created_at = (
+            datetime.fromtimestamp(info.created_at / 1000, tz=UTC)
+            if info.created_at
+            else datetime.fromtimestamp(info.last_modified / 1000, tz=UTC)
+        )
+        updated_at = datetime.fromtimestamp(info.last_modified / 1000, tz=UTC)
+        session = {
+            "id": info.session_id,
+            "user_id": 0,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "title": info.summary,
+        }
+
+        sdk_messages = get_session_messages(
+            session_id,
+            directory=directory,
+            limit=MAX_SESSION_LENGTH,
+        )
+        messages = []
+        for i, msg in enumerate(sdk_messages):
+            raw = getattr(msg, "message", None)
+            content = _extract_text(
+                raw.get("content") if isinstance(raw, dict) else raw
+            )
+            if not content:
+                continue
+            messages.append(
+                {
+                    "id": i,
+                    "role": getattr(msg, "type", "assistant"),
+                    "content": content,
+                    "created_at": created_at,
+                }
+            )
+        return session, messages
+    except Exception:
+        return None, []
+
+
 def _read_cli_session(session_id: str):
     """Read session metadata and messages from a Claude CLI JSONL transcript.
 
     Returns ``(session_dict, messages_list)`` or ``(None, [])`` if not found.
     """
-    from src.claude.facade import ClaudeIntegration
-
     # We don't know the project path here, so scan all project dirs
     home = Path(os.path.expanduser("~"))
     projects_dir = home / ".claude" / "projects"
@@ -88,35 +154,33 @@ def _read_cli_session(session_id: str):
                             except ValueError:
                                 pass
                     if obj_type == "user":
-                        text = _extract_text(
-                            obj.get("message", {}).get("content")
-                        )
+                        text = _extract_text(obj.get("message", {}).get("content"))
                         if text:
-                            messages.append({
-                                "id": msg_idx,
-                                "role": "user",
-                                "content": text,
-                                "created_at": obj.get("timestamp", ""),
-                            })
+                            messages.append(
+                                {
+                                    "id": msg_idx,
+                                    "role": "user",
+                                    "content": text,
+                                    "created_at": obj.get("timestamp", ""),
+                                }
+                            )
                             msg_idx += 1
                     elif obj_type == "assistant":
-                        text = _extract_text(
-                            obj.get("message", {}).get("content")
-                        )
+                        text = _extract_text(obj.get("message", {}).get("content"))
                         if text:
-                            messages.append({
-                                "id": msg_idx,
-                                "role": "assistant",
-                                "content": text,
-                                "created_at": obj.get("timestamp", ""),
-                            })
+                            messages.append(
+                                {
+                                    "id": msg_idx,
+                                    "role": "assistant",
+                                    "content": text,
+                                    "created_at": obj.get("timestamp", ""),
+                                }
+                            )
                             msg_idx += 1
                     if len(messages) >= MAX_SESSION_LENGTH:
                         break
 
-            mtime = datetime.fromtimestamp(
-                jsonl_path.stat().st_mtime, tz=UTC
-            )
+            mtime = datetime.fromtimestamp(jsonl_path.stat().st_mtime, tz=UTC)
             session = {
                 "id": session_id,
                 "user_id": 0,
@@ -146,6 +210,7 @@ class SessionExporter:
         user_id: int,
         session_id: str,
         format: ExportFormat = ExportFormat.MARKDOWN,
+        project_path: str | None = None,
     ) -> ExportedSession:
         """Export a session in the specified format.
 
@@ -162,7 +227,9 @@ class SessionExporter:
         """
         # Always try JSONL first — it contains the full conversation
         # (including CLI messages and bot messages that resume the same session).
-        session, messages = _read_cli_session(session_id)
+        session, messages = _read_sdk_session(session_id, project_path)
+        if session is None:
+            session, messages = _read_cli_session(session_id)
         checker = getattr(self.storage.sessions, "is_btw_fork_session", None)
         if (
             checker is not None
@@ -172,22 +239,16 @@ class SessionExporter:
         ):
             checker = None
         if checker is not None and await checker(session_id, user_id=user_id):
-            raise ValueError(
-                "BTW side sessions are hidden from normal export flows"
-            )
+            raise ValueError("BTW 旁路会话已从普通导出流程中隐藏")
 
         if session is None:
             # No JSONL transcript — fall back to DB
-            session_model = await self.storage.sessions.get_session(
-                session_id
-            )
+            session_model = await self.storage.sessions.get_session(session_id)
             if not session_model:
-                raise ValueError(f"Session {session_id} not found")
+                raise ValueError(f"session {session_id} 未找到")
 
-            message_models = (
-                await self.storage.messages.get_session_messages(
-                    session_id, limit=MAX_SESSION_LENGTH
-                )
+            message_models = await self.storage.messages.get_session_messages(
+                session_id, limit=MAX_SESSION_LENGTH
             )
             session = {
                 "id": session_model.session_id,
@@ -198,19 +259,23 @@ class SessionExporter:
             messages = []
             for i, msg in enumerate(message_models):
                 if msg.prompt:
-                    messages.append({
-                        "id": i,
-                        "role": "user",
-                        "content": msg.prompt,
-                        "created_at": msg.timestamp,
-                    })
+                    messages.append(
+                        {
+                            "id": i,
+                            "role": "user",
+                            "content": msg.prompt,
+                            "created_at": msg.timestamp,
+                        }
+                    )
                 if msg.response:
-                    messages.append({
-                        "id": i,
-                        "role": "assistant",
-                        "content": msg.response,
-                        "created_at": msg.timestamp,
-                    })
+                    messages.append(
+                        {
+                            "id": i,
+                            "role": "assistant",
+                            "content": msg.response,
+                            "created_at": msg.timestamp,
+                        }
+                    )
 
         # Export based on format
         if format == ExportFormat.MARKDOWN:
@@ -288,9 +353,9 @@ class SessionExporter:
             "session": {
                 "id": session["id"],
                 "user_id": session["user_id"],
-                "created_at": session["created_at"].isoformat(),
+                "created_at": _iso_datetime(session["created_at"]),
                 "updated_at": (
-                    session.get("updated_at", "").isoformat()
+                    _iso_datetime(session.get("updated_at", ""))
                     if session.get("updated_at")
                     else None
                 ),
@@ -301,7 +366,7 @@ class SessionExporter:
                     "id": msg["id"],
                     "role": msg["role"],
                     "content": msg["content"],
-                    "created_at": msg["created_at"].isoformat(),
+                    "created_at": _iso_datetime(msg["created_at"]),
                 }
                 for msg in messages
             ],
@@ -363,7 +428,10 @@ class SessionExporter:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Session {sid[:8]}</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+@import url(
+  'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500'
+  '&family=IBM+Plex+Sans:wght@400;500;600&display=swap'
+);
 *,:after,:before{{box-sizing:border-box;margin:0;padding:0}}
 :root{{
   --bg:#1a1b1e;--surface:#222326;--surface2:#2a2b2f;

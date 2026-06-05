@@ -2,6 +2,7 @@
 
 import asyncio
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -80,6 +81,45 @@ def deps():
         "rate_limiter": MagicMock(),
         "audit_logger": MagicMock(),
     }
+
+
+@pytest.mark.asyncio
+async def test_build_session_resume_text_uses_sdk_title_and_keeps_id(
+    tmp_dir, monkeypatch
+):
+    orchestrator = MessageOrchestrator.__new__(MessageOrchestrator)
+    session_id = "88d6817c-9b35-4858-a564-ea1f2a320b48"
+    project_path = tmp_dir / "claude-code-telegram"
+    project_path.mkdir()
+    monkeypatch.setattr(
+        "src.bot.orchestrator.ClaudeIntegration.get_sdk_session_info",
+        AsyncMock(
+            return_value={
+                "title": "你的插件里面有superpowers 吗？",
+                "last_used": datetime.now(UTC) - timedelta(hours=20),
+                "message_count": 185,
+            }
+        ),
+    )
+    claude_integration = MagicMock()
+    claude_integration.read_session_title = AsyncMock(return_value=None)
+    session_meta = SimpleNamespace(
+        last_used=datetime.now(UTC) - timedelta(hours=20),
+        message_count=49,
+    )
+
+    text = await orchestrator._build_session_resume_text(
+        session_id,
+        project_path,
+        claude_integration,
+        session_meta=session_meta,
+    )
+
+    assert "📎 你的插件里面有superpowers 吗？" in text
+    assert session_id in text
+    assert "claude-code-telegram" in text
+    assert "185条" in text
+    assert "49条" not in text
 
 
 def test_agentic_registers_commands(agentic_settings, deps):
@@ -161,10 +201,12 @@ def test_agentic_registers_text_document_photo_handlers(agentic_settings, deps):
         if isinstance(call[0][0], CallbackQueryHandler)
     ]
 
-    # 5 message handlers (text, document, photo, voice, unknown commands passthrough)
-    assert len(msg_handlers) == 5
-    # 6 callback handlers (stop:, auq:, plan:, cd:, provider:, sessions:)
-    assert len(cb_handlers) == 6
+    # 6 message handlers (btw command, text, unknown commands passthrough,
+    # document, photo, voice)
+    assert len(msg_handlers) == 6
+    # 9 callback handlers (stop:, auq:, plan:, cd:, repo:, repo_use:,
+    # repo_back:, provider:, sessions:)
+    assert len(cb_handlers) == 9
 
 
 async def test_agentic_bot_commands(agentic_settings, deps):
@@ -187,7 +229,9 @@ async def test_classic_bot_commands(classic_settings, deps):
         assert cmd in cmd_names
 
 
-async def test_auq_hook_denies_original_tool_with_telegram_answer(agentic_settings, deps):
+async def test_auq_hook_denies_original_tool_with_telegram_answer(
+    agentic_settings, deps
+):
     """AUQ hook must not allow the headless AskUserQuestion tool to read stdin."""
     orchestrator = MessageOrchestrator(agentic_settings, deps)
     bot = MagicMock()
@@ -375,10 +419,11 @@ async def test_restart_command_sends_sigterm(deps, tmp_path):
 
     mock_popen.assert_called_once()
     popen_args = mock_popen.call_args.args[0]
-    assert popen_args[0] == "cmd.exe"
-    assert "restart-helper.cmd" in " ".join(popen_args)
-    helper_text = (state_dir / "restart-helper.cmd").read_text(encoding="utf-8")
-    assert "Wait-Process" in helper_text
+    assert popen_args[0] == "wscript.exe"
+    assert "restart-helper.vbs" in " ".join(popen_args)
+    helper_text = (state_dir / "restart-helper.vbs").read_text(encoding="utf-8")
+    assert "WScript" in helper_text
+    assert "launcher" in helper_text
     assert "restart-helper.log" in " ".join(popen_args)
     mock_raise_signal.assert_called_once_with(signal.SIGTERM)
     # Verify confirmation message was sent
@@ -446,7 +491,12 @@ async def test_agentic_status_compact(agentic_settings, deps):
 
     call_args = update.message.reply_text.call_args
     text = call_args.args[0]
-    assert "Session: none" in text
+    # Compact statusline rendered as a Markdown code block:
+    # ```\n📂 <dir>\n<bar>  <pct>%  <tokens>\n```
+    assert text.strip().startswith("```")
+    assert "📂" in text
+    assert "0%" in text
+    assert "░" in text
 
 
 async def test_agentic_text_calls_claude(agentic_settings, deps):
@@ -967,6 +1017,8 @@ async def test_thread_mode_loads_and_persists_thread_state(group_thread_settings
         }
     }
 
+    deps["claude_integration"].read_session_title = AsyncMock(return_value=None)
+    update.message.reply_text = AsyncMock()
     await wrapped(update, context)
 
     assert (
@@ -1076,6 +1128,8 @@ async def test_private_mode_start_inside_topic_uses_thread_context(
         }
     }
 
+    deps["claude_integration"].read_session_title = AsyncMock(return_value=None)
+    update.message.reply_text = AsyncMock()
     await wrapped(update, context)
 
     project_threads_manager.resolve_project.assert_awaited_once_with(12345, 777)

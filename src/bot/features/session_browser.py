@@ -24,6 +24,7 @@ _FALLBACK_MAX_CHARS = 60
 
 PAGE_SIZE = 10
 _ROW_TITLE_MAX = 35  # characters in list-row button label
+_CURRENT_SESSION_ICON = "▶"
 
 
 def derive_fallback_title(first_prompt: Optional[str], session_id: str) -> str:
@@ -44,7 +45,7 @@ def derive_fallback_title(first_prompt: Optional[str], session_id: str) -> str:
 
 
 def _format_relative_time(when: datetime) -> str:
-    """Render a short relative-time string (e.g. '2h ago', '3d ago')."""
+    """Render a short Chinese relative-time string."""
     now = datetime.now(UTC)
     if when.tzinfo is None:
         # Defensive — DB rows should already be tz-aware.
@@ -52,12 +53,33 @@ def _format_relative_time(when: datetime) -> str:
     delta = now - when
     secs = int(delta.total_seconds())
     if secs < 60:
-        return f"{secs}s ago"
+        return f"{secs}秒前"
     if secs < 3600:
-        return f"{secs // 60}m ago"
+        return f"{secs // 60}分钟前"
     if secs < 86400:
-        return f"{secs // 3600}h ago"
-    return f"{secs // 86400}d ago"
+        return f"{secs // 3600}小时前"
+    return f"{secs // 86400}天前"
+
+
+def _format_datetime(when: datetime) -> str:
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    local = when.astimezone()
+    return local.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_bytes(size: Any) -> str:
+    try:
+        value = float(size)
+    except (TypeError, ValueError):
+        return str(size)
+    units = ["B", "KB", "MB", "GB", "TB"]
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
 
 
 def _truncate(s: str, n: int) -> str:
@@ -74,26 +96,109 @@ async def _first_prompt_for(storage: Any, session_id: str) -> Optional[str]:
 
     Used as a fallback when aiTitle is unavailable.
     """
+    db = getattr(storage, "db", None) or getattr(storage, "db_manager", None)
+    if db is not None:
+        try:
+            async with db.get_connection() as conn:
+                cursor = await conn.execute(
+                    """
+                    SELECT prompt FROM messages
+                    WHERE session_id = ?
+                    ORDER BY timestamp ASC, message_id ASC
+                    LIMIT 1
+                    """,
+                    (session_id,),
+                )
+                row = await cursor.fetchone()
+                if row:
+                    return row["prompt"] if "prompt" in row.keys() else row[0]
+        except Exception:
+            logger.debug("DB first prompt lookup failed", exc_info=True)
+
     try:
-        messages = await storage.get_session_messages(session_id, limit=1)
+        messages = await storage.get_session_messages(session_id, limit=1000)
     except Exception:
         return None
     if not messages:
         return None
-    first = messages[0]
+    first = min(
+        messages,
+        key=lambda m: (
+            getattr(m, "timestamp", None)
+            if not isinstance(m, dict)
+            else m.get("timestamp")
+        )
+        or datetime.max.replace(tzinfo=UTC),
+    )
     # Storage layer is consistent on `prompt` column for user input.
     if isinstance(first, dict):
         return first.get("prompt") or first.get("content")
     return getattr(first, "prompt", None) or getattr(first, "content", None)
 
 
-async def _resolve_title(storage: Any, project_path: str, session_id: str) -> str:
-    """Resolve display title: CLI aiTitle -> first prompt -> session id-based."""
+async def _resolve_title(
+    storage: Any,
+    project_path: str,
+    session_id: str,
+) -> str:
+    """Resolve display title from SDK/local metadata and DB fallback."""
+    sdk_info = await ClaudeIntegration.get_sdk_session_info(
+        session_id, Path(project_path)
+    )
+    if sdk_info:
+        sdk_title = _title_from_local_info(sdk_info)
+        if sdk_title:
+            return sdk_title
+
     title = await ClaudeIntegration.read_session_title(session_id, Path(project_path))
     if title:
         return title
     first_prompt = await _first_prompt_for(storage, session_id)
     return derive_fallback_title(first_prompt, session_id)
+
+
+def _title_from_local_info(info: dict) -> Optional[str]:
+    return (
+        info.get("title")
+        or info.get("summary")
+        or info.get("custom_title")
+        or info.get("ai_title")
+        or info.get("first_prompt")
+    )
+
+
+def _format_sdk_metadata_value(key: str, value: Any) -> str:
+    if isinstance(value, datetime):
+        return _format_datetime(value)
+    if key == "file_size" and value is not None:
+        return _format_bytes(value)
+    if value is None:
+        return "None"
+    return str(value)
+
+
+def _sdk_metadata_lines(info: dict) -> list[str]:
+    preferred = [
+        "session_id",
+        "title",
+        "summary",
+        "custom_title",
+        "first_prompt",
+        "created_at",
+        "last_used",
+        "message_count",
+        "git_branch",
+        "cwd",
+        "tag",
+        "file_size",
+    ]
+    keys = [key for key in preferred if key in info]
+    keys.extend(sorted(key for key in info if key not in set(keys)))
+    lines = ["", "SDK 元信息:"]
+    for key in keys:
+        value = escape_path(_format_sdk_metadata_value(key, info.get(key)))
+        lines.append(f"{key}: <code>{value}</code>")
+    return lines
 
 
 async def _btw_fork_ids(storage: Any, user_id: int, project_path: str) -> set[str]:
@@ -137,6 +242,7 @@ async def list_sessions_view(
     project_path: str,
     page: int,
     page_size: int = PAGE_SIZE,
+    current_session_id: Optional[str] = None,
 ) -> Tuple[str, InlineKeyboardMarkup]:
     """Render the /sessions list page.
 
@@ -145,9 +251,7 @@ async def list_sessions_view(
     """
     # --- DB sessions ---
     hidden_btw_ids = await _btw_fork_ids(storage, user_id, project_path)
-    db_total = await storage.count_user_sessions(
-        user_id, project_path=project_path
-    )
+    db_total = await storage.count_user_sessions(user_id, project_path=project_path)
     db_sessions: list = []
     if db_total > 0:
         db_sessions = await storage.get_user_sessions(
@@ -161,25 +265,26 @@ async def list_sessions_view(
     # --- CLI sessions (JSONL files) ---
     cli_map: dict = {}  # session_id → {message_count, last_used}
     try:
-        cli_raw = await ClaudeIntegration.scan_cli_sessions(
-            Path(project_path)
-        )
+        cli_raw = await ClaudeIntegration.list_sdk_sessions(Path(project_path))
+        if not cli_raw:
+            cli_raw = await ClaudeIntegration.scan_cli_sessions(Path(project_path))
         for d in cli_raw:
             if d["session_id"] in hidden_btw_ids:
                 continue
             cli_map[d["session_id"]] = d
     except Exception:
-        logger.debug("CLI session scan failed", exc_info=True)
+        logger.debug("Local session scan failed", exc_info=True)
 
-    # For DB sessions: use max(DB count, CLI count), tag if CLI has more
+    # For DB sessions: prefer the local transcript count when the JSONL exists.
     for s in db_sessions:
         cli = cli_map.pop(s.session_id, None)
         if cli:
-            if cli["message_count"] > s.message_count:
-                s.message_count = cli["message_count"]
-            s._is_cli = True
+            s.message_count = cli["message_count"]
+            s._is_cli = False
+            s._local_title = _title_from_local_info(cli)
         else:
             s._is_cli = False
+            s._local_title = None
 
     # Remaining CLI-only sessions
     cli_sessions = [
@@ -188,6 +293,7 @@ async def list_sessions_view(
             last_used=d["last_used"],
             message_count=d["message_count"],
             _is_cli=True,
+            _local_title=_title_from_local_info(d),
         )
         for d in cli_map.values()
     ]
@@ -214,8 +320,12 @@ async def list_sessions_view(
 
     rows: list[list[InlineKeyboardButton]] = []
     for s in page_sessions:
-        title = await _resolve_title(storage, project_path, s.session_id)
+        title = getattr(s, "_local_title", None) or await _resolve_title(
+            storage, project_path, s.session_id
+        )
         label = _truncate(title, _ROW_TITLE_MAX)
+        if current_session_id and s.session_id == current_session_id:
+            label = f"{_CURRENT_SESSION_ICON} " + label
         cli_tag = " · CLI" if getattr(s, "_is_cli", False) else ""
         suffix = (
             f" · {_format_relative_time(s.last_used)}"
@@ -234,15 +344,11 @@ async def list_sessions_view(
     nav: list[InlineKeyboardButton] = []
     if page > 0:
         nav.append(
-            InlineKeyboardButton(
-                "← 上一页", callback_data=f"sessions:list:{page - 1}"
-            )
+            InlineKeyboardButton("← 上一页", callback_data=f"sessions:list:{page - 1}")
         )
     if page < total_pages - 1:
         nav.append(
-            InlineKeyboardButton(
-                "下一页 →", callback_data=f"sessions:list:{page + 1}"
-            )
+            InlineKeyboardButton("下一页 →", callback_data=f"sessions:list:{page + 1}")
         )
     if nav:
         rows.append(nav)
@@ -270,14 +376,13 @@ async def session_detail_view(
     """
     if await _is_btw_fork(storage, session_id, user_id):
         text = (
-            "💡 <b>BTW side session</b>\n\n"
-            "This fork is hidden from normal session history and cannot be "
-            "resumed or exported from Telegram."
+            "💡 <b>BTW 旁路会话</b>\n\n"
+            "这个 fork 已从普通 session 历史中隐藏，不能在 Telegram 里恢复或导出。"
         )
         rows = [
             [
                 InlineKeyboardButton(
-                    "Back to list",
+                    "返回列表",
                     callback_data=f"sessions:back:{back_page}",
                 )
             ]
@@ -289,9 +394,9 @@ async def session_detail_view(
 
     if session is None and project_path:
         # Check if this is a CLI session
-        cli_sessions = await ClaudeIntegration.scan_cli_sessions(
-            Path(project_path)
-        )
+        cli_sessions = await ClaudeIntegration.list_sdk_sessions(Path(project_path))
+        if not cli_sessions:
+            cli_sessions = await ClaudeIntegration.scan_cli_sessions(Path(project_path))
         for cs in cli_sessions:
             if cs["session_id"] == session_id:
                 now = datetime.now(UTC)
@@ -313,28 +418,41 @@ async def session_detail_view(
     if session is None:
         return None
 
-    title = await _resolve_title(storage, str(session.project_path), session_id)
+    local_info = await ClaudeIntegration.get_sdk_session_info(
+        session_id, Path(str(session.project_path))
+    )
+    if local_info and "message_count" in local_info:
+        session.message_count = local_info["message_count"]
+    title = (
+        _title_from_local_info(local_info)
+        if local_info
+        else await _resolve_title(storage, str(session.project_path), session_id)
+    )
     expired = session.is_expired(session_timeout_hours)
 
     text_lines = [
         f"📄 <b>{escape_path(title)}</b>",
     ]
     if is_cli:
-        text_lines.append("<i>CLI session（未在 bot 数据库中）</i>")
+        text_lines.append("<i>CLI 会话（未在 bot 数据库中）</i>")
     text_lines.append("")
+    text_lines.append(f"创建于 {_format_datetime(session.created_at)}")
     text_lines.append(
-        f"创建于 {session.created_at.strftime('%Y-%m-%d %H:%M')}"
+        f"最近活动 {_format_relative_time(session.last_used)}"
+        f" ({_format_datetime(session.last_used)})"
     )
-    text_lines.append(f"最近活动 {_format_relative_time(session.last_used)}")
     if is_cli:
         text_lines.append(f"消息数 {session.message_count}")
     else:
         text_lines.append(
-            f"消息数 {session.message_count}"
-            f" · 累计费用 ${session.total_cost:.4f}"
+            f"消息数 {session.message_count}" f" · 累计费用 ${session.total_cost:.4f}"
         )
     if expired:
         text_lines.append("⏰ 超过自动恢复时限，手动恢复仍可用")
+    if local_info:
+        text_lines.extend(_sdk_metadata_lines(local_info))
+    elif not is_cli:
+        text_lines.append("本地 transcript 文件未找到")
     text_lines.append(f"<code>{escape_path(session_id)}</code>")
     text = "\n".join(text_lines)
 
@@ -367,5 +485,22 @@ async def session_detail_view(
                 callback_data=f"sessions:back:{back_page}",
             )
         ]
+    )
+    action_rows.insert(
+        -1,
+        [
+            InlineKeyboardButton(
+                "重命名",
+                callback_data=f"sessions:rename:{session_id}",
+            ),
+            InlineKeyboardButton(
+                "设置标签",
+                callback_data=f"sessions:tag:{session_id}",
+            ),
+            InlineKeyboardButton(
+                "清除标签",
+                callback_data=f"sessions:cleartag:{session_id}",
+            ),
+        ],
     )
     return text, InlineKeyboardMarkup(action_rows)
