@@ -463,3 +463,78 @@ class TestSessionDetailView:
             back_page=0,
         )
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_delete_button_shown_for_non_current_session(self):
+        """Delete button appears when viewed session is not the current one."""
+        storage = AsyncMock()
+        storage.load_session = AsyncMock(return_value=_fake_session("abc-123"))
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="my title",
+        ):
+            _, kb = await session_detail_view(
+                storage=storage,
+                user_id=42,
+                session_id="abc-123",
+                back_page=0,
+                current_session_id="other-session",
+            )
+        flat = [btn for row in kb.inline_keyboard for btn in row]
+        cbs = {b.callback_data for b in flat}
+        assert "sessions:confirm_delete:abc-123" in cbs
+
+    @pytest.mark.asyncio
+    async def test_delete_button_hidden_for_current_session(self):
+        """Delete button is NOT shown when viewed session is the current one."""
+        storage = AsyncMock()
+        storage.load_session = AsyncMock(return_value=_fake_session("abc-123"))
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="my title",
+        ):
+            _, kb = await session_detail_view(
+                storage=storage,
+                user_id=42,
+                session_id="abc-123",
+                back_page=0,
+                current_session_id="abc-123",
+            )
+        flat = [btn for row in kb.inline_keyboard for btn in row]
+        cbs = {b.callback_data for b in flat}
+        assert "sessions:confirm_delete:abc-123" not in cbs
+
+    @pytest.mark.asyncio
+    async def test_delete_button_shown_when_no_current_session(self):
+        """Delete button appears when there is no current session at all."""
+        storage = AsyncMock()
+        storage.load_session = AsyncMock(return_value=_fake_session("abc-123"))
+        with patch(
+            "src.bot.features.session_browser.ClaudeIntegration.read_session_title",
+            new_callable=AsyncMock,
+            return_value="my title",
+        ):
+            _, kb = await session_detail_view(
+                storage=storage,
+                user_id=42,
+                session_id="abc-123",
+                back_page=0,
+                current_session_id=None,
+            )
+        flat = [btn for row in kb.inline_keyboard for btn in row]
+        cbs = {b.callback_data for b in flat}
+        assert "sessions:confirm_delete:abc-123" in cbs
+
+
+class TestDeleteConfirmKeyboard:
+    def test_returns_confirm_and_cancel_buttons(self):
+        from src.bot.features.session_browser import delete_confirm_keyboard
+
+        kb = delete_confirm_keyboard("abc-123")
+        flat = [btn for row in kb.inline_keyboard for btn in row]
+        cbs = {b.callback_data for b in flat}
+        assert len(flat) == 2
+        assert "sessions:do_delete:abc-123" in cbs
+        assert "sessions:detail:abc-123" in cbs

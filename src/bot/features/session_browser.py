@@ -368,6 +368,7 @@ async def session_detail_view(
     back_page: int,
     session_timeout_hours: int = 24,
     project_path: Optional[str] = None,
+    current_session_id: Optional[str] = None,
 ) -> Optional[Tuple[str, InlineKeyboardMarkup]]:
     """Render the detail view for a single session.
 
@@ -478,14 +479,21 @@ async def session_detail_view(
             )
         ],
     ]
-    action_rows.append(
-        [
+    last_row: list[InlineKeyboardButton] = []
+    if current_session_id != session_id:
+        last_row.append(
             InlineKeyboardButton(
-                "← 返回列表",
-                callback_data=f"sessions:back:{back_page}",
+                "🗑 删除",
+                callback_data=f"sessions:confirm_delete:{session_id}",
             )
-        ]
+        )
+    last_row.append(
+        InlineKeyboardButton(
+            "← 返回列表",
+            callback_data=f"sessions:back:{back_page}",
+        )
     )
+    action_rows.append(last_row)
     action_rows.insert(
         -1,
         [
@@ -504,3 +512,21 @@ async def session_detail_view(
         ],
     )
     return text, InlineKeyboardMarkup(action_rows)
+
+
+def delete_confirm_keyboard(session_id: str) -> InlineKeyboardMarkup:
+    """Return a confirmation keyboard for session deletion."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "⚠️ 确认删除",
+                    callback_data=f"sessions:do_delete:{session_id}",
+                ),
+                InlineKeyboardButton(
+                    "取消",
+                    callback_data=f"sessions:detail:{session_id}",
+                ),
+            ]
+        ]
+    )
