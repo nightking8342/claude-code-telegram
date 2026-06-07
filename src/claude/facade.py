@@ -507,6 +507,56 @@ class ClaudeIntegration:
             return False
 
     @staticmethod
+    async def delete_session(
+        session_id: str,
+        project_path: Path,
+        session_storage: Any,
+    ) -> bool:
+        """Delete a session from both SDK JSONL and SQLite.
+
+        SDK deletion is best-effort: FileNotFoundError (JSONL already gone)
+        and ImportError (SDK unavailable) are logged and skipped.
+        SQLite deletion failure propagates to the caller.
+
+        Args:
+            session_id: UUID of the session to delete.
+            project_path: Project directory for locating the JSONL file.
+            session_storage: SessionStorage instance
+                (``bot_data["storage"].sessions``).
+
+        Returns True on success.
+        """
+
+        def _delete_sdk() -> None:
+            from claude_agent_sdk import delete_session
+
+            delete_session(session_id, directory=str(project_path))
+
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _delete_sdk)
+        except FileNotFoundError:
+            logger.warning(
+                "SDK JSONL not found during delete, skipping",
+                session_id=session_id,
+            )
+        except ImportError:
+            logger.warning(
+                "claude_agent_sdk unavailable for delete",
+                session_id=session_id,
+            )
+        except Exception:
+            logger.warning(
+                "Unexpected SDK error during delete",
+                session_id=session_id,
+                exc_info=True,
+            )
+
+        await session_storage.delete_session(session_id)
+        logger.info("Session deleted", session_id=session_id)
+        return True
+
+    @staticmethod
     async def scan_cli_sessions(project_path: Path) -> list[dict]:
         """Scan Claude CLI transcript files for sessions in *project_path*.
 
