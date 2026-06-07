@@ -14,6 +14,7 @@ from ...config.settings import Settings
 from ...security.audit import AuditLogger
 from ...security.validators import SecurityValidator
 from ..features.session_browser import (
+    delete_confirm_keyboard,
     derive_fallback_title,
     list_sessions_view,
     session_detail_view,
@@ -1611,8 +1612,6 @@ async def handle_sessions_callback(
             )
             return
 
-        from src.bot.features.session_browser import delete_confirm_keyboard
-
         await query.edit_message_reply_markup(
             reply_markup=delete_confirm_keyboard(session_id)
         )
@@ -1662,6 +1661,7 @@ async def handle_sessions_callback(
             )
         except Exception:
             logger.exception("Failed to delete session", session_id=session_id)
+            await query.answer("删除失败", show_alert=True)
             await query.message.reply_text("删除失败，请重试。")
             return
 

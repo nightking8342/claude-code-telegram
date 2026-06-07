@@ -137,6 +137,8 @@ class TestDoDelete:
             ),
         ):
             await handle_sessions_callback(query, "do_delete:abc-123", context)
+        query.answer.assert_called_once()
+        assert "失败" in query.answer.call_args[0][0]
         query.message.reply_text.assert_called_once()
         assert "失败" in query.message.reply_text.call_args[0][0]
 
