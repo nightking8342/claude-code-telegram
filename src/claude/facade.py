@@ -524,7 +524,8 @@ class ClaudeIntegration:
             session_storage: SessionStorage instance
                 (``bot_data["storage"].sessions``).
 
-        Returns True on success.
+        Returns True on success.  Unlike rename/tag, returns True even when
+        the SDK leg was skipped (SQLite is the authoritative store).
         """
 
         def _delete_sdk() -> None:
@@ -546,7 +547,7 @@ class ClaudeIntegration:
                 session_id=session_id,
             )
         except Exception:
-            logger.warning(
+            logger.debug(
                 "Unexpected SDK error during delete",
                 session_id=session_id,
                 exc_info=True,
