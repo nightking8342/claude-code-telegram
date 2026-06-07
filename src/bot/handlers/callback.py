@@ -1432,7 +1432,8 @@ async def handle_sessions_callback(
     """Sub-dispatcher for sessions:* callbacks.
 
     `param` is the portion after `sessions:` — e.g. `list:1`, `detail:<id>`,
-    `view:<id>`, `resume:<id>`, `export:<id>`, `export:<id>:md`, `back:1`.
+    `view:<id>`, `resume:<id>`, `export:<id>`, `export:<id>:md`, `back:1`,
+    `confirm_delete:<id>`, `do_delete:<id>`.
     """
     user_id = query.from_user.id
     storage = context.bot_data["storage"].sessions
@@ -1478,6 +1479,7 @@ async def handle_sessions_callback(
             back_page=0,
             session_timeout_hours=settings.session_timeout_hours,
             project_path=str(current_directory),
+            current_session_id=context.user_data.get("claude_session_id"),
         )
         if result is None:
             # Distinguish "cross-user" from "missing" — the session row may
