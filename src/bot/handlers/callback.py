@@ -1582,6 +1582,107 @@ async def handle_sessions_callback(
             )
         return
 
+    if sub_action == "confirm_delete":
+        session_id = rest
+        ownership = await _check_session_ownership(
+            storage, user_id, session_id, str(current_directory)
+        )
+        if ownership == "btw_fork":
+            await query.answer("BTW 旁路会话已隐藏", show_alert=True)
+            return
+        if ownership == "cross_user":
+            await query.answer("无权访问该 session", show_alert=True)
+            return
+        if ownership == "missing":
+            await query.answer("session 不存在或已删除")
+            text, kb = await list_sessions_view(
+                storage=storage,
+                user_id=user_id,
+                project_path=str(current_directory),
+                page=0,
+                current_session_id=context.user_data.get("claude_session_id"),
+            )
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+            return
+
+        if context.user_data.get("claude_session_id") == session_id:
+            await query.answer(
+                "不能删除当前正在使用的 session", show_alert=True
+            )
+            return
+
+        from src.bot.features.session_browser import delete_confirm_keyboard
+
+        await query.edit_message_reply_markup(
+            reply_markup=delete_confirm_keyboard(session_id)
+        )
+        if audit_logger:
+            await audit_logger.log_session_event(
+                user_id=user_id,
+                action="sessions_delete_confirm",
+                success=True,
+                details={"session_id": session_id},
+            )
+        return
+
+    if sub_action == "do_delete":
+        session_id = rest
+        ownership = await _check_session_ownership(
+            storage, user_id, session_id, str(current_directory)
+        )
+        if ownership == "btw_fork":
+            await query.answer("BTW 旁路会话已隐藏", show_alert=True)
+            return
+        if ownership == "cross_user":
+            await query.answer("无权访问该 session", show_alert=True)
+            return
+        if ownership == "missing":
+            await query.answer("session 不存在或已删除")
+            text, kb = await list_sessions_view(
+                storage=storage,
+                user_id=user_id,
+                project_path=str(current_directory),
+                page=0,
+                current_session_id=context.user_data.get("claude_session_id"),
+            )
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+            return
+
+        if context.user_data.get("claude_session_id") == session_id:
+            await query.answer(
+                "不能删除当前正在使用的 session", show_alert=True
+            )
+            return
+
+        try:
+            await ClaudeIntegration.delete_session(
+                session_id=session_id,
+                project_path=Path(str(current_directory)),
+                session_storage=storage,
+            )
+        except Exception:
+            logger.exception("Failed to delete session", session_id=session_id)
+            await query.message.reply_text("删除失败，请重试。")
+            return
+
+        await query.answer("session 已删除")
+        text, kb = await list_sessions_view(
+            storage=storage,
+            user_id=user_id,
+            project_path=str(current_directory),
+            page=0,
+            current_session_id=context.user_data.get("claude_session_id"),
+        )
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+        if audit_logger:
+            await audit_logger.log_session_event(
+                user_id=user_id,
+                action="sessions_deleted",
+                success=True,
+                details={"session_id": session_id},
+            )
+        return
+
     if sub_action == "view":
         session_id = rest
         ownership = await _check_session_ownership(
