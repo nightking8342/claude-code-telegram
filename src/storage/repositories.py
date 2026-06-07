@@ -303,6 +303,28 @@ class SessionRepository:
             rows = await cursor.fetchall()
             return {str(row[0]) for row in rows}
 
+    async def delete_session(self, session_id: str) -> None:
+        """Hard-delete a session and its related data.
+
+        Deletes child rows (messages, tool_usage) first to satisfy FK
+        constraints, then removes the session row itself.
+        """
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                "DELETE FROM tool_usage WHERE session_id = ?",
+                (session_id,),
+            )
+            await conn.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                (session_id,),
+            )
+            await conn.execute(
+                "DELETE FROM sessions WHERE session_id = ?",
+                (session_id,),
+            )
+            await conn.commit()
+        logger.info("Session deleted from DB", session_id=session_id)
+
     async def cleanup_old_sessions(self, days: int = 30) -> int:
         """Mark old sessions as inactive."""
         async with self.db.get_connection() as conn:
