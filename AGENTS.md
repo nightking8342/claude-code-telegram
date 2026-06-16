@@ -63,6 +63,7 @@ Agentic 模式（默认）请求链：安全校验（group -3）-> 认证（grou
 ### 配置与功能开关
 
 环境变量配置见 `@.env.example`，功能开关见 `@src/config/features.py`，项目 topic 配置见 `@config/projects.example.yaml`。
+新增或修改 ENV 配置项时，必须同步维护 `.env.example`（含注释说明），保持两者一致。
 
 ## Claude SDK 规则
 

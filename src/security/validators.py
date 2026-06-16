@@ -40,55 +40,7 @@ class SecurityValidator:
         r"\x00",  # Null byte
     ]
 
-    # Allowed file extensions for uploads
-    ALLOWED_EXTENSIONS = {
-        ".py",
-        ".js",
-        ".ts",
-        ".jsx",
-        ".tsx",
-        ".java",
-        ".cpp",
-        ".c",
-        ".h",
-        ".hpp",
-        ".cs",
-        ".go",
-        ".rs",
-        ".rb",
-        ".php",
-        ".swift",
-        ".kt",
-        ".md",
-        ".txt",
-        ".json",
-        ".yml",
-        ".yaml",
-        ".toml",
-        ".xml",
-        ".html",
-        ".css",
-        ".scss",
-        ".less",
-        ".sql",
-        ".sh",
-        ".bash",
-        ".zsh",
-        ".fish",
-        ".ps1",
-        ".bat",
-        ".cmd",
-        ".r",
-        ".scala",
-        ".clj",
-        ".hs",
-        ".elm",
-        ".vue",
-        ".svelte",
-        ".lock",
-    }
-
-    # Forbidden filenames and patterns
+    # Default forbidden filenames and patterns
     FORBIDDEN_FILENAMES = {
         ".env",
         ".env.local",
@@ -132,15 +84,32 @@ class SecurityValidator:
     ]
 
     def __init__(
-        self, approved_directory: Path, disable_security_patterns: bool = False
+        self,
+        approved_directory: Path,
+        disable_security_patterns: bool = False,
+        extra_forbidden_filenames: Optional[List[str]] = None,
+        extra_dangerous_file_patterns: Optional[List[str]] = None,
     ):
         """Initialize validator with approved directory."""
         self.approved_directory = approved_directory.resolve()
         self.disable_security_patterns = disable_security_patterns
+
+        # Merge user-provided forbidden filenames with defaults
+        self.forbidden_filenames: set[str] = set(self.FORBIDDEN_FILENAMES)
+        if extra_forbidden_filenames:
+            self.forbidden_filenames.update(extra_forbidden_filenames)
+
+        # Merge user-provided dangerous file patterns with defaults
+        self.dangerous_file_patterns: List[str] = list(self.DANGEROUS_FILE_PATTERNS)
+        if extra_dangerous_file_patterns:
+            self.dangerous_file_patterns.extend(extra_dangerous_file_patterns)
+
         logger.info(
             "Security validator initialized",
             approved_directory=str(self.approved_directory),
             disable_security_patterns=self.disable_security_patterns,
+            forbidden_filenames_count=len(self.forbidden_filenames),
+            dangerous_file_patterns_count=len(self.dangerous_file_patterns),
         )
 
     def validate_path(
@@ -241,27 +210,17 @@ class SecurityValidator:
                 return False, "Invalid filename: contains forbidden pattern"
 
         # Check for forbidden filenames
-        if filename.lower() in {name.lower() for name in self.FORBIDDEN_FILENAMES}:
+        if filename.lower() in {name.lower() for name in self.forbidden_filenames}:
             logger.warning("Forbidden filename", filename=filename)
             return False, f"Forbidden filename: {filename}"
 
         # Check for dangerous file patterns
-        for pattern in self.DANGEROUS_FILE_PATTERNS:
+        for pattern in self.dangerous_file_patterns:
             if re.match(pattern, filename, re.IGNORECASE):
                 logger.warning(
                     "Dangerous file pattern", filename=filename, pattern=pattern
                 )
                 return False, f"File type not allowed: {filename}"
-
-        # Check extension
-        path_obj = Path(filename)
-        ext = path_obj.suffix.lower()
-
-        if ext and ext not in self.ALLOWED_EXTENSIONS:
-            logger.warning(
-                "File extension not allowed", filename=filename, extension=ext
-            )
-            return False, f"File type not allowed: {ext}"
 
         # Check for hidden files (starting with .)
         if filename.startswith(".") and filename not in {".gitignore", ".gitkeep"}:
@@ -363,7 +322,7 @@ class SecurityValidator:
             return False
 
         # Check for forbidden names
-        if dirname.lower() in {name.lower() for name in self.FORBIDDEN_FILENAMES}:
+        if dirname.lower() in {name.lower() for name in self.forbidden_filenames}:
             return False
 
         # Check for hidden directories
@@ -380,10 +339,9 @@ class SecurityValidator:
         """Get summary of security validation rules."""
         return {
             "approved_directory": str(self.approved_directory),
-            "allowed_extensions": sorted(list(self.ALLOWED_EXTENSIONS)),
-            "forbidden_filenames": sorted(list(self.FORBIDDEN_FILENAMES)),
+            "forbidden_filenames": sorted(list(self.forbidden_filenames)),
             "dangerous_patterns_count": len(self.DANGEROUS_PATTERNS),
-            "dangerous_file_patterns_count": len(self.DANGEROUS_FILE_PATTERNS),
+            "dangerous_file_patterns_count": len(self.dangerous_file_patterns),
             "max_filename_length": 255,
             "max_command_length": 1000,
         }

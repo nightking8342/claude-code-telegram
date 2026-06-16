@@ -1,6 +1,7 @@
 """Message handlers for non-command inputs."""
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -761,35 +762,41 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             # Fall back to basic file handling
             file = await document.get_file()
             file_bytes = await file.download_as_bytearray()
+            caption = update.message.caption or "Please review this file:"
 
-            # Try to decode as text
+            # Determine save directory from config
+            cfg = context.bot_data.get("config")
+            save_dir = Path(
+                cfg.approved_directory
+                if hasattr(cfg, "approved_directory")
+                else "."
+            ) / ".tmp" / "uploads"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            is_text = True
+            content = ""
             try:
                 content = file_bytes.decode("utf-8")
-
-                # Check content length
-                max_content_length = 50000  # 50KB of text
-                if len(content) > max_content_length:
-                    content = (
-                        content[:max_content_length]
-                        + "\n... (file truncated for processing)"
-                    )
-
-                # Create prompt with file content
-                caption = update.message.caption or "Please review this file:"
-                prompt = f"{caption}\n\n**File:** `{document.file_name}`\n\n```\n{content}\n```"
-
             except UnicodeDecodeError:
-                await progress_msg.edit_text(
-                    "❌ <b>File Format Not Supported</b>\n\n"
-                    "File must be text-based and UTF-8 encoded.\n\n"
-                    "<b>Supported formats:</b>\n"
-                    "• Source code files (.py, .js, .ts, etc.)\n"
-                    "• Text files (.txt, .md)\n"
-                    "• Configuration files (.json, .yaml, .toml)\n"
-                    "• Documentation files",
-                    parse_mode="HTML",
+                is_text = False
+
+            # Small text file → embed in prompt
+            if is_text and len(content) <= 50000:
+                prompt = (
+                    f"{caption}\n\n**File:** `{document.file_name}`\n\n"
+                    f"```\n{content}\n```"
                 )
-                return
+            else:
+                # Large text or binary → save to disk, let Claude read via tools
+                save_path = save_dir / document.file_name
+                save_path.write_bytes(bytes(file_bytes))
+                kind = "text" if is_text else "binary"
+                size_kb = len(file_bytes) / 1024
+                prompt = (
+                    f"{caption}\n\n**File:** `{document.file_name}` "
+                    f"({kind}, {size_kb:.0f}KB)\n"
+                    f"Saved to: `{save_path}`"
+                )
 
         # Delete progress message
         await progress_msg.delete()

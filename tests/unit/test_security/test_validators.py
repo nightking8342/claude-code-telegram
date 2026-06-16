@@ -292,7 +292,6 @@ class TestSecurityValidator:
         summary = validator.get_security_summary()
 
         assert "approved_directory" in summary
-        assert "allowed_extensions" in summary
         assert "forbidden_filenames" in summary
         assert "dangerous_patterns_count" in summary
         assert "max_filename_length" in summary
@@ -302,7 +301,6 @@ class TestSecurityValidator:
         assert summary["dangerous_patterns_count"] > 0
         assert summary["max_filename_length"] == 255
         assert summary["max_command_length"] == 1000
-        assert len(summary["allowed_extensions"]) > 10
 
     def test_path_validation_with_symlinks(self, validator, temp_approved_dir):
         """Test path validation with symbolic links."""

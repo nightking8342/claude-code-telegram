@@ -2162,20 +2162,41 @@ class MessageOrchestrator:
         if not file_handler:
             file = await document.get_file()
             file_bytes = await file.download_as_bytearray()
+            caption = update.message.caption or "请审查此文件："
+
+            # Determine save directory from config
+            cfg = context.bot_data.get("config")
+            save_dir = Path(
+                cfg.approved_directory
+                if hasattr(cfg, "approved_directory")
+                else "."
+            ) / ".tmp" / "uploads"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            is_text = True
+            content = ""
             try:
                 content = file_bytes.decode("utf-8")
-                if len(content) > 50000:
-                    content = content[:50000] + "\n... (truncated)"
-                caption = update.message.caption or "请审查此文件："
+            except UnicodeDecodeError:
+                is_text = False
+
+            # Small text file → embed in prompt
+            if is_text and len(content) <= 50000:
                 prompt = (
                     f"{caption}\n\n**File:** `{document.file_name}`\n\n"
                     f"```\n{content}\n```"
                 )
-            except UnicodeDecodeError:
-                await progress_msg.edit_text(
-                    "不支持的文件格式，需为文本文件（UTF-8）。"
+            else:
+                # Large text or binary → save to disk, let Claude read via tools
+                save_path = save_dir / document.file_name
+                save_path.write_bytes(bytes(file_bytes))
+                kind = "text" if is_text else "binary"
+                size_kb = len(file_bytes) / 1024
+                prompt = (
+                    f"{caption}\n\n**File:** `{document.file_name}` "
+                    f"({kind}, {size_kb:.0f}KB)\n"
+                    f"Saved to: `{save_path}`"
                 )
-                return
 
         # Process with Claude
         claude_integration = context.bot_data.get("claude_integration")

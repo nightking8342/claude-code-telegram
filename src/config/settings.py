@@ -67,6 +67,20 @@ class Settings(BaseSettings):
         False,
         description="Allow all Claude tools by bypassing tool validation checks",
     )
+    forbidden_filenames: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Additional forbidden filenames (merged with defaults). "
+            "Comma-separated in ENV."
+        ),
+    )
+    extra_dangerous_file_patterns: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Additional dangerous file patterns (regex, merged with defaults). "
+            "Comma-separated in ENV."
+        ),
+    )
 
     # Claude settings
     claude_binary_path: Optional[str] = Field(
@@ -383,6 +397,18 @@ class Settings(BaseSettings):
             return [tool.strip() for tool in v.split(",") if tool.strip()]
         if isinstance(v, list):
             return [str(tool) for tool in v]
+        return v  # type: ignore[no-any-return]
+
+    @field_validator("forbidden_filenames", "extra_dangerous_file_patterns", mode="before")
+    @classmethod
+    def parse_string_list(cls, v: Any) -> Optional[List[str]]:
+        """Parse comma-separated string lists."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        if isinstance(v, list):
+            return [str(item) for item in v]
         return v  # type: ignore[no-any-return]
 
     @field_validator("approved_directory")
