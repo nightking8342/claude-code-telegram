@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Chinese localization / 中文本地化**：所有面向用户的机器人字符串翻译为中文，包括命令描述、认证消息和重启通知
 
 ### Changed / 变更
+- **File upload whitelist removed / 文件上传白名单移除**：`SecurityValidator` 不再使用 `ALLOWED_EXTENSIONS` 扩展名白名单；改为仅用黑名单（`FORBIDDEN_FILENAMES` + `DANGEROUS_FILE_PATTERNS`）过滤危险文件
+- **Security config exposed to ENV / 安全配置暴露为 ENV**：`FORBIDDEN_FILENAMES` 和 `EXTRA_DANGEROUS_FILE_PATTERNS` 新增为可选环境变量，与内置默认值合并；`.env.example` 同步补全所有缺失配置项
+
+### Fixed / 修复
+- **Binary file upload rejected / 二进制文件上传被拒**：发送 `.apk`、`.hkpkg` 等二进制文件时报错"不支持的文件格式"；改为保存到磁盘并传递文件路径给 Claude
+- **Large text file truncated / 大文本文件被截断**：超过 50KB 的文本文件内容被截断后丢失原始信息；改为保存到磁盘，由 Claude 通过工具按需读取
+
 - **`claude_setting_sources` config / 配置项**：新增 `CLAUDE_SETTING_SOURCES` 环境变量，统一控制 SDK 和 skill 发现的文件系统来源（`"user"`, `"project"`, `"local"`），取代 sdk_integration.py 中的硬编码
 - **Skill list respects setting_sources / skill 列表跟随配置**：`/skill` 命令展示的 skill 列表现在根据 `setting_sources` 过滤，排除当前不可用的技能
 - **Project-level skill discovery / 项目级 skill 发现**：`/skill` 命令新增项目级 `.claude/skills/` 和 `.claude/commands/` 扫描，从工作目录向上遍历到 git root
