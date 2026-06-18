@@ -600,6 +600,14 @@ class MessageOrchestrator:
             )
         )
 
+        # Verbose level inline keyboard buttons
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self.handle_verbose_callback),
+                pattern=r"^verbose:",
+            )
+        )
+
         logger.info("Agentic handlers registered")
 
     def _register_classic_handlers(self, app: Application) -> None:
@@ -1258,13 +1266,20 @@ class MessageOrchestrator:
         if not args:
             current = self._get_verbose_level(context)
             labels = {0: "静默", 1: "正常", 2: "详细"}
+            buttons = []
+            for lvl, label in labels.items():
+                marker = "✅ " if lvl == current else ""
+                buttons.append(
+                    InlineKeyboardButton(
+                        f"{marker}{label}（{lvl}）",
+                        callback_data=f"verbose:{lvl}",
+                    )
+                )
+            keyboard = InlineKeyboardMarkup([buttons])
             await update.message.reply_text(
-                f"输出详细度：<b>{current}</b>（{labels.get(current, '?')}）\n\n"
-                "用法：<code>/verbose 0|1|2</code>\n"
-                "  0 = 静默（仅最终回复）\n"
-                "  1 = 正常（工具名 + 推理摘要）\n"
-                "  2 = 详细（工具输入 + 完整推理）",
+                f"当前输出详细度：<b>{current}</b>（{labels.get(current, '?')}）",
                 parse_mode="HTML",
+                reply_markup=keyboard,
             )
             return
 
@@ -1283,6 +1298,37 @@ class MessageOrchestrator:
         await update.message.reply_text(
             f"输出详细度已设为 <b>{level}</b>（{labels[level]}）",
             parse_mode="HTML",
+        )
+
+    async def handle_verbose_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle inline keyboard callback for /verbose level selection."""
+        query = update.callback_query
+        await query.answer()
+        try:
+            level = int(query.data.split(":")[1])
+        except (IndexError, ValueError):
+            return
+        if level not in (0, 1, 2):
+            return
+        context.user_data["verbose_level"] = level
+        labels = {0: "静默", 1: "正常", 2: "详细"}
+        # Update message with new selection
+        buttons = []
+        for lvl, label in labels.items():
+            marker = "✅ " if lvl == level else ""
+            buttons.append(
+                InlineKeyboardButton(
+                    f"{marker}{label}（{lvl}）",
+                    callback_data=f"verbose:{lvl}",
+                )
+            )
+        keyboard = InlineKeyboardMarkup([buttons])
+        await query.edit_message_text(
+            f"输出详细度已设为 <b>{level}</b>（{labels[level]}）",
+            parse_mode="HTML",
+            reply_markup=keyboard,
         )
 
     async def agentic_rich(
