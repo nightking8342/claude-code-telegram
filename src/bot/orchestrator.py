@@ -682,7 +682,7 @@ class MessageOrchestrator:
                 BotCommand("sessions", "Browse & resume sessions"),
                 BotCommand("restart", "Restart the bot"),
                 BotCommand("skill", "List or invoke skills"),
-                BotCommand("btw", "Ask a side question (no history)"),
+                BotCommand("btw", "Ask along the way (no effect on current context)"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "Sync project topics"))
@@ -727,7 +727,7 @@ class MessageOrchestrator:
                 BotCommand("sessions", "浏览并恢复历史会话"),
                 BotCommand("restart", "重启机器人"),
                 BotCommand("skill", "列出或调用技能"),
-                BotCommand("btw", "快速提问（不影响会话历史）"),
+                BotCommand("btw", "顺便问一下（不影响当前上下文）"),
             ]
             if self.settings.enable_project_threads:
                 commands.append(BotCommand("sync_threads", "同步项目话题"))
