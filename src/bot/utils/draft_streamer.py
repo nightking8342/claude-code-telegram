@@ -101,11 +101,12 @@ class DraftStreamer:
             overflow = len(self._tool_lines) - _MAX_TOOL_LINES
             if overflow >= 3:
                 parts.append(f"... +{overflow} more")
-            parts.extend(visible)
+            # Join tool lines with blank line separators for readability
+            parts.append("\n\n".join(visible))
 
         if self._accumulated_text:
             if parts:
-                parts.append("")  # blank separator line
+                parts.append("")  # blank separator before response body
             parts.append(self._accumulated_text)
 
         return "\n".join(parts)

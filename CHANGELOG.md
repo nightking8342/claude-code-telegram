@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added / 新增
 - **Rich Messages (Bot API 10.1) / 富文本消息**：接入 Telegram Rich Message API，Claude 回复中的表格、列表、标题、代码块以原生富文本块渲染（替代平面 HTML）；通过 `bot._post()` 封装 `sendRichMessage` / `sendRichMessageDraft`，待 PTB 原生支持后可无缝切换；功能开关 `ENABLE_RICH_MESSAGES` 默认关闭，`/rich on|off` per-user 切换
 - **`/verbose` inline buttons / 按钮选择**：`/verbose` 无参数时显示内联键盘按钮（0 静默 / 1 正常 / 2 详细），点击即切换，按钮收起
+- **Stream draft spacing / 流式草稿间距**：流式传输中工具记录和推理之间增加空行分隔，提升可读性
+- **`VERBOSE_LEVEL` default / 默认详细度**：默认输出详细度从 1（正常）改为 2（详细），显示完整推理和工具输入
 - **`/btw` side question / 侧路提问**：不中断主会话向 Claude 快速提问 —— 隔离的临时运行，`max_turns=1`，独立配置目录，不持久化
 - **`/repo` recursive browsing / 递归浏览**：递归浏览和下载仓库文件，支持目录树导航
 - **`/model` command / 模型命令**：查看和切换活跃模型

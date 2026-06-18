@@ -254,11 +254,11 @@ class TestDraftStreamerToolLines:
 
 class TestDraftStreamerComposition:
     async def test_tools_only(self, streamer, mock_bot):
-        """Draft with only tool lines shows just tools."""
+        """Draft with only tool lines shows tools separated by blank lines."""
         streamer._tool_lines = ["\U0001f4d6 Read", "\U0001f527 Grep"]
         await streamer.flush()
         call_kwargs = mock_bot.send_message_draft.call_args[1]
-        assert call_kwargs["text"] == "\U0001f4d6 Read\n\U0001f527 Grep"
+        assert call_kwargs["text"] == "\U0001f4d6 Read\n\n\U0001f527 Grep"
 
     async def test_text_only(self, streamer, mock_bot):
         """Draft with only text shows just text (no separator)."""
