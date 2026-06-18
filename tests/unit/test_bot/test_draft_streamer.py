@@ -21,7 +21,7 @@ from src.bot.utils.draft_streamer import (
     DraftStreamer,
     generate_draft_id,
 )
-from src.utils.constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from src.utils.constants import TELEGRAM_MAX_MESSAGE_LENGTH, TELEGRAM_RICH_MESSAGE_MAX_LENGTH
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -322,3 +322,102 @@ class TestDraftStreamerMidStreamDisable:
         # State frozen at point of disable — no new data accumulated
         assert "more" not in streamer._accumulated_text
         assert "tool2" not in streamer._tool_lines
+
+
+# ---------------------------------------------------------------------------
+# Rich Message mode
+# ---------------------------------------------------------------------------
+
+
+class TestDraftStreamerRichMode:
+    """Tests for rich message draft streaming (Bot API 10.1)."""
+
+    @pytest.fixture
+    def rich_streamer(self, mock_bot):
+        from unittest.mock import AsyncMock
+
+        # Patch the import inside _send_draft
+        mock_send = AsyncMock(return_value=True)
+        streamer = DraftStreamer(
+            bot=mock_bot,
+            chat_id=123,
+            draft_id=42,
+            throttle_interval=0.3,
+            use_rich_messages=True,
+        )
+        # Mock the send_rich_message_draft function
+        import src.bot.utils.telegram_rich as rich_mod
+
+        rich_mod.send_rich_message_draft = mock_send
+        return streamer
+
+    async def test_rich_mode_calls_send_rich_message_draft(
+        self, rich_streamer, mock_bot
+    ):
+        """Rich mode should call send_rich_message_draft instead of send_message_draft."""
+        await rich_streamer.append_text("hello **bold**")
+        mock_bot.send_message_draft.assert_not_called()
+
+    async def test_rich_mode_uses_32k_truncation(self, rich_streamer, mock_bot):
+        """Rich mode should truncate at 32768 chars, not 4096."""
+        long_text = "x" * 40000
+        rich_streamer._accumulated_text = long_text
+        await rich_streamer.flush()
+
+        import src.bot.utils.telegram_rich as rich_mod
+
+        call_args = rich_mod.send_rich_message_draft.call_args
+        # The markdown arg is positional: (bot, chat_id, draft_id, markdown, ...)
+        markdown = call_args[0][3]
+        assert len(markdown) == TELEGRAM_RICH_MESSAGE_MAX_LENGTH
+        assert markdown[0] == "…"
+
+    async def test_rich_mode_compose_draft_preserves_markdown(
+        self, rich_streamer
+    ):
+        """Draft composition should preserve raw markdown in rich mode."""
+        rich_streamer._accumulated_text = "# Title\n\n**bold** and `code`"
+        draft = rich_streamer._compose_draft()
+        assert "# Title" in draft
+        assert "**bold**" in draft
+        assert "`code`" in draft
+
+    async def test_rich_mode_self_disables_on_error(
+        self, rich_streamer, mock_bot
+    ):
+        """Rich mode should self-disable on API error."""
+        import src.bot.utils.telegram_rich as rich_mod
+
+        rich_mod.send_rich_message_draft = AsyncMock(
+            side_effect=Exception("API error")
+        )
+        await rich_streamer.append_text("test")
+        assert not rich_streamer._enabled
+
+    async def test_rich_mode_flush_when_disabled_is_noop(
+        self, rich_streamer, mock_bot
+    ):
+        """Disabled rich streamer should not send."""
+        rich_streamer._enabled = False
+        rich_streamer._accumulated_text = "text"
+        await rich_streamer.flush()
+        mock_bot.send_message_draft.assert_not_called()
+
+    async def test_rich_mode_thread_id_passed(self, mock_bot):
+        """message_thread_id should be passed in rich mode."""
+        import src.bot.utils.telegram_rich as rich_mod
+
+        mock_send = AsyncMock(return_value=True)
+        rich_mod.send_rich_message_draft = mock_send
+
+        streamer = DraftStreamer(
+            bot=mock_bot,
+            chat_id=123,
+            draft_id=42,
+            message_thread_id=999,
+            use_rich_messages=True,
+        )
+        await streamer.append_text("hello")
+        call_args = mock_send.call_args
+        # Check keyword arg
+        assert call_args[1].get("message_thread_id") == 999

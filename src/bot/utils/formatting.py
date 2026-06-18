@@ -7,6 +7,7 @@ from typing import List, Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ...config.settings import Settings
+from ...utils.constants import TELEGRAM_RICH_MESSAGE_MAX_LENGTH
 from .html_format import escape_html, markdown_to_telegram_html
 
 
@@ -17,6 +18,7 @@ class FormattedMessage:
     text: str
     parse_mode: str = "HTML"
     reply_markup: Optional[InlineKeyboardMarkup] = None
+    rich_markdown: Optional[str] = None  # Raw markdown for Rich Messages (Bot API 10.1)
 
     def __len__(self) -> int:
         """Return length of message text."""
@@ -29,7 +31,13 @@ class ResponseFormatter:
     def __init__(self, settings: Settings):
         """Initialize formatter with settings."""
         self.settings = settings
-        self.max_message_length = 4000  # Telegram limit is 4096, leave some buffer
+        self.use_rich_messages = settings.enable_rich_messages
+        # Rich Messages allow 32768 chars (8x the regular 4096 limit)
+        self.max_message_length = (
+            TELEGRAM_RICH_MESSAGE_MAX_LENGTH
+            if self.use_rich_messages
+            else 4000
+        )
         self.max_code_block_length = (
             15000  # Max length for individual code blocks before splitting
         )
@@ -60,6 +68,13 @@ class ResponseFormatter:
 
         # Filter out any empty messages produced by formatting/splitting
         messages = [m for m in messages if m.text and m.text.strip()]
+
+        # In rich mode, populate rich_markdown with raw content
+        if self.use_rich_messages:
+            for msg in messages:
+                msg.rich_markdown = msg.text
+                # rich messages don't use HTML parse_mode
+                msg.parse_mode = ""
 
         return (
             messages
@@ -443,8 +458,9 @@ class ResponseFormatter:
         # Remove excessive whitespace
         text = re.sub(r"\n{3,}", "\n\n", text)
 
-        # Convert markdown to Telegram HTML
-        text = markdown_to_telegram_html(text)
+        # In rich mode, preserve raw markdown — Telegram parses it natively
+        if not self.use_rich_messages:
+            text = markdown_to_telegram_html(text)
 
         return text.strip()
 
@@ -453,7 +469,10 @@ class ResponseFormatter:
 
         With HTML mode, markdown_to_telegram_html already handles code blocks.
         This method now just truncates oversized code blocks.
+        In rich mode, this is a no-op — Telegram handles code blocks natively.
         """
+        if self.use_rich_messages:
+            return text
 
         def _truncate_code(m: re.Match) -> str:  # type: ignore[type-arg]
             full = m.group(0)

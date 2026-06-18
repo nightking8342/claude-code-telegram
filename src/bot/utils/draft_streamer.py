@@ -1,4 +1,4 @@
-"""Stream partial responses to Telegram via sendMessageDraft."""
+"""Stream partial responses to Telegram via sendMessageDraft / sendRichMessageDraft."""
 
 import secrets
 import time
@@ -7,7 +7,7 @@ from typing import List, Optional
 import structlog
 import telegram
 
-from src.utils.constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from src.utils.constants import TELEGRAM_MAX_MESSAGE_LENGTH, TELEGRAM_RICH_MESSAGE_MAX_LENGTH
 
 logger = structlog.get_logger()
 
@@ -35,11 +35,12 @@ class DraftStreamer:
        token-by-token.
 
     Both sections are combined into a single draft message and sent via
-    ``sendMessageDraft``.
+    ``sendMessageDraft`` (plain text) or ``sendRichMessageDraft`` (rich markdown).
 
     Key design decisions:
     - Plain text drafts (no parse_mode) to avoid partial HTML/markdown errors.
-    - Tail-truncation for messages >4096 chars: shows ``"\\u2026" + last 4093 chars``.
+    - Rich mode sends raw markdown for native Telegram rendering.
+    - Tail-truncation for messages exceeding the limit.
     - Self-disabling: any API error silently disables the streamer so the
       request continues with normal (non-streaming) delivery.
     """
@@ -51,12 +52,14 @@ class DraftStreamer:
         draft_id: int,
         message_thread_id: Optional[int] = None,
         throttle_interval: float = 0.3,
+        use_rich_messages: bool = False,
     ) -> None:
         self.bot = bot
         self.chat_id = chat_id
         self.draft_id = draft_id
         self.message_thread_id = message_thread_id
         self.throttle_interval = throttle_interval
+        self._use_rich_messages = use_rich_messages
 
         self._tool_lines: List[str] = []
         self._accumulated_text = ""
@@ -113,19 +116,37 @@ class DraftStreamer:
         if not draft_text.strip():
             return
 
-        # Tail-truncate if over Telegram limit
-        if len(draft_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
-            draft_text = "\u2026" + draft_text[-(TELEGRAM_MAX_MESSAGE_LENGTH - 1) :]
+        # Choose truncation limit based on mode
+        max_len = (
+            TELEGRAM_RICH_MESSAGE_MAX_LENGTH
+            if self._use_rich_messages
+            else TELEGRAM_MAX_MESSAGE_LENGTH
+        )
+
+        # Tail-truncate if over limit
+        if len(draft_text) > max_len:
+            draft_text = "…" + draft_text[-(max_len - 1) :]
 
         try:
-            kwargs = {
-                "chat_id": self.chat_id,
-                "text": draft_text,
-                "draft_id": self.draft_id,
-            }
-            if self.message_thread_id is not None:
-                kwargs["message_thread_id"] = self.message_thread_id
-            await self.bot.send_message_draft(**kwargs)
+            if self._use_rich_messages:
+                from .telegram_rich import send_rich_message_draft
+
+                await send_rich_message_draft(
+                    self.bot,
+                    self.chat_id,
+                    self.draft_id,
+                    draft_text,
+                    message_thread_id=self.message_thread_id,
+                )
+            else:
+                kwargs = {
+                    "chat_id": self.chat_id,
+                    "text": draft_text,
+                    "draft_id": self.draft_id,
+                }
+                if self.message_thread_id is not None:
+                    kwargs["message_thread_id"] = self.message_thread_id
+                await self.bot.send_message_draft(**kwargs)
             self._last_send_time = time.time()
         except Exception:
             logger.debug(

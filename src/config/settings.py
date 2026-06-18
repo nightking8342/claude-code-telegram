@@ -320,6 +320,15 @@ class Settings(BaseSettings):
         le=5.0,
     )
 
+    # Rich Messages (Bot API 10.1)
+    enable_rich_messages: bool = Field(
+        False,
+        description=(
+            "Send messages using Telegram Rich Message API "
+            "(Bot API 10.1). Requires a compatible Bot API server."
+        ),
+    )
+
     # Monitoring
     log_level: str = Field("INFO", description="Logging level")
     enable_telemetry: bool = Field(False, description="Enable anonymous telemetry")

@@ -19,6 +19,7 @@ def mock_settings():
     """Mock settings for testing."""
     settings = Mock(spec=Settings)
     settings.enable_quick_actions = True
+    settings.enable_rich_messages = False
     return settings
 
 
@@ -528,3 +529,89 @@ class TestOversizedResponseIntegration:
             assert (
                 len(msg.text) <= TELEGRAM_HARD_LIMIT
             ), f"Chunk {i} is {len(msg.text)} chars (limit {TELEGRAM_HARD_LIMIT})"
+
+
+# ---------------------------------------------------------------------------
+# Rich Message mode (Bot API 10.1)
+# ---------------------------------------------------------------------------
+
+
+class TestRichMessageMode:
+    """Tests for Rich Message formatting mode."""
+
+    @pytest.fixture
+    def rich_settings(self):
+        settings = Mock(spec=Settings)
+        settings.enable_quick_actions = False
+        settings.enable_rich_messages = True
+        return settings
+
+    @pytest.fixture
+    def rich_formatter(self, rich_settings):
+        return ResponseFormatter(rich_settings)
+
+    def test_rich_mode_preserves_markdown(self, rich_formatter):
+        """Rich mode should NOT convert markdown to HTML."""
+        text = "**bold** and `code`\n\n# Header\n\n- item 1\n- item 2"
+        messages = rich_formatter.format_claude_response(text)
+        assert len(messages) == 1
+        # Should contain raw markdown, not HTML tags
+        assert "**bold**" in messages[0].text
+        assert "`code`" in messages[0].text
+        assert "# Header" in messages[0].text
+        assert "- item 1" in messages[0].text
+        assert "<b>" not in messages[0].text
+        assert "<code>" not in messages[0].text
+
+    def test_rich_mode_sets_rich_markdown_field(self, rich_formatter):
+        """Rich mode should populate rich_markdown on FormattedMessage."""
+        text = "**hello** world"
+        messages = rich_formatter.format_claude_response(text)
+        assert messages[0].rich_markdown == "**hello** world"
+
+    def test_rich_mode_sets_parse_mode_empty(self, rich_formatter):
+        """Rich mode should set parse_mode to empty string."""
+        text = "Hello"
+        messages = rich_formatter.format_claude_response(text)
+        assert messages[0].parse_mode == ""
+
+    def test_rich_mode_max_length_is_32k(self, rich_formatter):
+        """Rich mode should use 32768 as max message length."""
+        assert rich_formatter.max_message_length == 32768
+
+    def test_rich_mode_does_not_split_short_messages(self, rich_formatter):
+        """Messages under 32768 chars should not be split."""
+        text = "x" * 10000
+        messages = rich_formatter.format_claude_response(text)
+        assert len(messages) == 1
+
+    def test_rich_mode_splits_very_long_messages(self, rich_formatter):
+        """Messages over 32768 chars should be split."""
+        text = "x" * 40000
+        messages = rich_formatter.format_claude_response(text)
+        assert len(messages) > 1
+        for msg in messages:
+            assert len(msg.text) <= 32768
+
+    def test_rich_mode_code_blocks_noop(self, rich_formatter):
+        """_format_code_blocks should be a no-op in rich mode."""
+        text = "```python\nprint('hello')\n```"
+        result = rich_formatter._format_code_blocks(text)
+        assert result == text  # Unchanged
+
+    def test_non_rich_mode_still_converts_to_html(self):
+        """Non-rich mode should still convert markdown to HTML."""
+        settings = Mock(spec=Settings)
+        settings.enable_quick_actions = False
+        settings.enable_rich_messages = False
+        formatter = ResponseFormatter(settings)
+        text = "**bold** text"
+        messages = formatter.format_claude_response(text)
+        assert "<b>" in messages[0].text
+        assert messages[0].parse_mode == "HTML"
+        assert messages[0].rich_markdown is None
+
+    def test_formatted_message_rich_markdown_default_none(self):
+        """FormattedMessage.rich_markdown should default to None."""
+        msg = FormattedMessage("text")
+        assert msg.rich_markdown is None

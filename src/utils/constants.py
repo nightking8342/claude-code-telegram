@@ -23,6 +23,7 @@ DEFAULT_MAX_SESSIONS_PER_USER = 5
 # Message limits
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 SAFE_MESSAGE_LENGTH = 4000  # Leave room for formatting
+TELEGRAM_RICH_MESSAGE_MAX_LENGTH = 32768  # Rich Messages (Bot API 10.1)
 
 # Session limits
 MAX_SESSION_LENGTH = 1000  # Maximum messages per session

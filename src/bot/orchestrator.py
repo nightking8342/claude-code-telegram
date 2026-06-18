@@ -460,6 +460,7 @@ class MessageOrchestrator:
             ("new", self.agentic_new),
             ("status", self.agentic_status),
             ("verbose", self.agentic_verbose),
+            ("rich", self.agentic_rich),
             ("plan", self.agentic_plan),
             ("repo", self.agentic_repo),
             ("provider", self.agentic_provider),
@@ -673,6 +674,7 @@ class MessageOrchestrator:
                 BotCommand("new", "Start a fresh session"),
                 BotCommand("status", "Show session status"),
                 BotCommand("verbose", "Set output verbosity (0/1/2)"),
+                BotCommand("rich", "Toggle rich message rendering"),
                 BotCommand("plan", "Toggle plan mode (read-only analysis)"),
                 BotCommand("repo", "List repos / switch workspace"),
                 BotCommand("provider", "List/switch API providers"),
@@ -717,6 +719,7 @@ class MessageOrchestrator:
                 BotCommand("new", "新建会话"),
                 BotCommand("status", "查看会话状态"),
                 BotCommand("verbose", "设置输出详细度 (0/1/2)"),
+                BotCommand("rich", "切换富文本渲染模式"),
                 BotCommand("plan", "切换规划模式（只读分析）"),
                 BotCommand("repo", "列出/切换项目目录"),
                 BotCommand("provider", "列出/切换 API 提供商"),
@@ -918,19 +921,52 @@ class MessageOrchestrator:
                 if ctx_window >= 1_000_000
                 else f"{ctx_window // 1_000}k"
             )
+            rich_enabled = self._is_rich_messages_enabled(context)
+            roles = pm.get_role_models()
+
+            if rich_enabled:
+                # Rich Messages: render as markdown table
+                md_lines = [
+                    "# 🤖 模型配置\n",
+                    "| 项目 | 值 |",
+                    "|------|----|",
+                    f"| 默认模型 | `{model}` ({source}) |",
+                    f"| 上下文窗口 | {ctx_label} |",
+                ]
+                if roles:
+                    for role in _VALID_ROLES:
+                        rm = roles.get(role)
+                        if rm:
+                            md_lines.append(f"| {role} | `{rm}` |")
+                try:
+                    from .utils.telegram_rich import send_rich_message
+
+                    await send_rich_message(
+                        context.bot,
+                        update.message.chat_id,
+                        "\n".join(md_lines),
+                        reply_parameters={
+                            "message_id": update.message.message_id
+                        },
+                    )
+                    return
+                except Exception:
+                    rich_enabled = False
+
             lines = [
                 "<b>🤖 模型配置</b>\n",
                 "<b>⚙️ 默认</b>",
                 f"<code>{model}</code>（{source}）",
                 f"窗口 {ctx_label}",
             ]
-            roles = pm.get_role_models()
             if roles:
                 role_lines = []
                 for role in _VALID_ROLES:
                     rm = roles.get(role)
                     if rm:
-                        role_lines.append(f"<code>{role}</code> → <code>{rm}</code>")
+                        role_lines.append(
+                            f"<code>{role}</code> → <code>{rm}</code>"
+                        )
                 if role_lines:
                     lines.append("\n" + "\n".join(role_lines))
             await update.message.reply_text("\n".join(lines), parse_mode="HTML")
@@ -1170,9 +1206,39 @@ class MessageOrchestrator:
             bar = "▓" * filled + "░" * (bar_len - filled)
             line2 = f"{bar}  {ctx_pct}%  {tok_str}"
 
-            await update.message.reply_text(
-                f"```\n{line1}\n{line2}\n```", parse_mode="Markdown"
-            )
+            rich_enabled = self._is_rich_messages_enabled(context)
+            if rich_enabled:
+                # Rich Messages: render as a markdown table
+                md = (
+                    "# 📊 状态\n\n"
+                    "| 项目 | 值 |\n"
+                    "|------|----|\n"
+                    f"| 模型 | `{model_name or '—'}` |\n"
+                    f"| 目录 | `{dir_name}` |\n"
+                    f"| Git | `{branch or '—'}`"
+                    + (f" `+{staged}`" if staged else "")
+                    + (f" `~{modified}`" if modified else "")
+                    + " |\n"
+                    f"| 上下文 | `{line2}` |\n"
+                )
+                try:
+                    from .utils.telegram_rich import send_rich_message
+
+                    await send_rich_message(
+                        context.bot,
+                        update.message.chat_id,
+                        md,
+                        reply_parameters={
+                            "message_id": update.message.message_id
+                        },
+                    )
+                except Exception:
+                    rich_enabled = False
+
+            if not rich_enabled:
+                await update.message.reply_text(
+                    f"```\n{line1}\n{line2}\n```", parse_mode="Markdown"
+                )
         except Exception as e:
             logger.error("agentic_status_error", error=str(e))
             await update.message.reply_text(f"状态查询出错：{e}")
@@ -1218,6 +1284,51 @@ class MessageOrchestrator:
             f"输出详细度已设为 <b>{level}</b>（{labels[level]}）",
             parse_mode="HTML",
         )
+
+    async def agentic_rich(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Toggle rich messages: /rich [on|off]."""
+        args = update.message.text.split()[1:] if update.message.text else []
+        if not args:
+            current = self._is_rich_messages_enabled(context)
+            status = "✅ 开启" if current else "❌ 关闭"
+            source = "用户设置" if "rich_messages_enabled" in context.user_data else "全局默认"
+            await update.message.reply_text(
+                f"Rich Messages：<b>{status}</b>（{source}）\n\n"
+                "用法：<code>/rich on</code> 或 <code>/rich off</code>\n"
+                "Rich Messages 使用 Telegram Bot API 10.1 原生渲染 Markdown\n"
+                "（表格、列表、标题、代码块等）",
+                parse_mode="HTML",
+            )
+            return
+
+        arg = args[0].lower()
+        if arg in ("on", "1", "true", "开启"):
+            context.user_data["rich_messages_enabled"] = True
+            await update.message.reply_text(
+                "✅ Rich Messages 已<b>开启</b>（仅对当前会话生效）",
+                parse_mode="HTML",
+            )
+        elif arg in ("off", "0", "false", "关闭"):
+            context.user_data["rich_messages_enabled"] = False
+            await update.message.reply_text(
+                "❌ Rich Messages 已<b>关闭</b>（仅对当前会话生效）",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                "用法：<code>/rich on</code> 或 <code>/rich off</code>"
+            )
+
+    def _is_rich_messages_enabled(
+        self, context: ContextTypes.DEFAULT_TYPE
+    ) -> bool:
+        """Return effective rich messages setting: per-user override or global default."""
+        user_override = context.user_data.get("rich_messages_enabled")
+        if user_override is not None:
+            return bool(user_override)
+        return self.settings.enable_rich_messages
 
     async def agentic_plan(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1285,13 +1396,21 @@ class MessageOrchestrator:
                 )
                 return
 
+            # Always use HTML for /skill — <code> tags enable tap-to-copy.
+            # Rich Messages' backtick code blocks do NOT support tap-to-copy,
+            # and RichTextBotCommand only works for registered bot commands,
+            # not arbitrary /skill <name> invocations.
             lines = [f"<b>📋 可用 Skills · 共 {len(skills)} 个</b>\n"]
             for s in skills:
                 lines.append(f"🔹 <code>/skill {s.name}</code>")
                 if s.description:
-                    lines.append(f"　　<i>{html.escape(s.description)}</i>")
+                    lines.append(
+                        f"　　<i>{html.escape(s.description)}</i>"
+                    )
             lines.append("\n<i>点击指令即可复制到剪贴板。</i>")
-            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            await update.message.reply_text(
+                "\n".join(lines), parse_mode="HTML"
+            )
         else:
             # Has argument — forward to Claude as skill invocation
             skill_text = parts[1]  # "smart-search-cli 今日新闻 top1"
@@ -1390,13 +1509,13 @@ class MessageOrchestrator:
                 if first_response:
                     await progress_msg.edit_text(
                         formatted.text,
-                        parse_mode=formatted.parse_mode,
+                        parse_mode=formatted.parse_mode or None,
                     )
                     first_response = False
                 else:
                     await msg.reply_text(
                         formatted.text,
-                        parse_mode=formatted.parse_mode,
+                        parse_mode=formatted.parse_mode or None,
                     )
 
             duration_ms = int((asyncio.get_event_loop().time() - start_time) * 1000)
@@ -1657,6 +1776,46 @@ class MessageOrchestrator:
 
         return _on_stream
 
+    async def _send_rich_message_with_fallback(
+        self,
+        update: Update,
+        message: "FormattedMessage",
+        reply_to_message_id: Optional[int] = None,
+    ) -> None:
+        """Send a rich message, falling back to HTML on failure."""
+        if not message.rich_markdown:
+            await update.message.reply_text(
+                message.text,
+                parse_mode=message.parse_mode or None,
+                reply_markup=None,
+                reply_to_message_id=reply_to_message_id,
+            )
+            return
+
+        try:
+            from .utils.telegram_rich import send_rich_message
+
+            reply_params = None
+            if reply_to_message_id:
+                reply_params = {"message_id": reply_to_message_id}
+            await send_rich_message(
+                update.get_bot(),
+                update.message.chat_id,
+                message.rich_markdown,
+                reply_parameters=reply_params,
+            )
+        except Exception as rich_err:
+            logger.warning(
+                "Rich message send failed, falling back to HTML",
+                error=str(rich_err),
+            )
+            await update.message.reply_text(
+                message.text,
+                parse_mode=message.parse_mode or None,
+                reply_markup=None,
+                reply_to_message_id=reply_to_message_id,
+            )
+
     async def _send_images(
         self,
         update: Update,
@@ -1914,6 +2073,7 @@ class MessageOrchestrator:
         mcp_images: List[ImageAttachment] = []
 
         # Stream drafts (private chats only)
+        rich_enabled = self._is_rich_messages_enabled(context)
         draft_streamer: Optional[DraftStreamer] = None
         if self.settings.enable_stream_drafts and chat.type == "private":
             draft_streamer = DraftStreamer(
@@ -1922,6 +2082,7 @@ class MessageOrchestrator:
                 draft_id=generate_draft_id(),
                 message_thread_id=update.message.message_thread_id,
                 throttle_interval=self.settings.stream_draft_interval,
+                use_rich_messages=rich_enabled,
             )
 
         on_stream = self._make_stream_callback(
@@ -1999,6 +2160,11 @@ class MessageOrchestrator:
             from .utils.formatting import ResponseFormatter
 
             formatter = ResponseFormatter(self.settings)
+            # Apply per-user rich messages override
+            formatter.use_rich_messages = rich_enabled
+            formatter.max_message_length = (
+                32768 if rich_enabled else formatter.max_message_length
+            )
 
             response_content = claude_response.content
             if claude_response.interrupted:
@@ -2055,14 +2221,23 @@ class MessageOrchestrator:
                 if not message.text or not message.text.strip():
                     continue
                 try:
-                    await update.message.reply_text(
-                        message.text,
-                        parse_mode=message.parse_mode,
-                        reply_markup=None,  # No keyboards in agentic mode
-                        reply_to_message_id=(
-                            update.message.message_id if i == 0 else None
-                        ),
-                    )
+                    if rich_enabled:
+                        await self._send_rich_message_with_fallback(
+                            update,
+                            message,
+                            reply_to_message_id=(
+                                update.message.message_id if i == 0 else None
+                            ),
+                        )
+                    else:
+                        await update.message.reply_text(
+                            message.text,
+                            parse_mode=message.parse_mode,
+                            reply_markup=None,  # No keyboards in agentic mode
+                            reply_to_message_id=(
+                                update.message.message_id if i == 0 else None
+                            ),
+                        )
                     if i < len(formatted_messages) - 1:
                         await asyncio.sleep(0.5)
                 except Exception as send_err:
