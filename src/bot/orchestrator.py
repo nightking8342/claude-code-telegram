@@ -1314,21 +1314,10 @@ class MessageOrchestrator:
             return
         context.user_data["verbose_level"] = level
         labels = {0: "静默", 1: "正常", 2: "详细"}
-        # Update message with new selection
-        buttons = []
-        for lvl, label in labels.items():
-            marker = "✅ " if lvl == level else ""
-            buttons.append(
-                InlineKeyboardButton(
-                    f"{marker}{label}（{lvl}）",
-                    callback_data=f"verbose:{lvl}",
-                )
-            )
-        keyboard = InlineKeyboardMarkup([buttons])
         await query.edit_message_text(
             f"输出详细度已设为 <b>{level}</b>（{labels[level]}）",
             parse_mode="HTML",
-            reply_markup=keyboard,
+            reply_markup=None,
         )
 
     async def agentic_rich(
