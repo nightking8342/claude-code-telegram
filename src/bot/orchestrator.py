@@ -972,6 +972,12 @@ class MessageOrchestrator:
 
         args = update.message.text.split()[1:] if update.message.text else []
 
+        # Check for -s / --search flag to search directly from command line
+        if len(args) >= 2 and args[0] in ("-s", "--search"):
+            keyword = " ".join(args[1:])
+            await self._show_model_list(update, context, pm, user_id=update.effective_user.id, search=keyword)
+            return
+
         # ── No args: show interactive model list panel ──────────
         if not args:
             await self._show_model_list(update, context, pm, user_id=update.effective_user.id)
@@ -1146,6 +1152,33 @@ class MessageOrchestrator:
             sent = await update_or_query.message.reply_text(text, reply_markup=markup)  # type: ignore
             self._model_panel_state[user_id]["message_id"] = sent.message_id
             self._model_panel_state[user_id]["chat_id"] = sent.chat_id
+
+    async def _enter_model_search(
+        self, query: CallbackQuery, user_id: int
+    ) -> None:
+        """Enter search mode: prompt user to type a search keyword."""
+        text = (
+            "📋 模型列表  🔍 搜索中...\n"
+            "━━━━━━━━━━━━━━━━\n"
+            "请在聊天框中输入搜索关键词（如 deepseek），\n"
+            "我会过滤匹配的模型。\n\n"
+            "（回复此消息的关键词会被拦截为搜索词）\n"
+            "━━━━━━━━━━━━━━━━"
+        )
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ 取消搜索", callback_data="model:search_cancel"),
+        ]])
+
+        self._model_panel_state[user_id] = {
+            "search": "",  # non-None empty string = in search mode, awaiting input
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+
+        try:
+            await query.edit_message_text(text, reply_markup=markup)
+        except Exception:
+            await query.answer("面板已过期，请重新 /model", show_alert=True)
 
     @staticmethod
     def _display_width(text: str) -> int:
@@ -2077,6 +2110,35 @@ class MessageOrchestrator:
         from .features.session_edit import handle_pending_session_edit
 
         if text is None and await handle_pending_session_edit(update, context):
+            return
+
+        # Check if user is in model search mode
+        search_state = self._model_panel_state.get(user_id)
+        if search_state and search_state.get("search") is not None:
+            keyword = message_text.strip()
+            if not keyword:
+                return  # empty message, stay in search mode
+            pm = context.bot_data.get("provider_manager")
+            if pm:
+                search_state["search"] = keyword
+                self._model_panel_state[user_id] = search_state
+                try:
+                    models = await pm.fetch_models()
+                except Exception:
+                    models = []
+                if models:
+                    text = self._build_panel_status_header(pm)
+                    markup = self._build_model_list_markup(models, page=0, search=keyword)
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=search_state["chat_id"],
+                            message_id=search_state["message_id"],
+                            text=text,
+                            reply_markup=markup,
+                        )
+                    except Exception:
+                        pass  # panel expired, ignore
+            await update.message.delete()  # hide the search keyword from chat
             return
 
         # Check if user is answering an "Other" question from AskUserQuestion
