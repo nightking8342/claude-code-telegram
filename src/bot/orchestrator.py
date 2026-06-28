@@ -593,6 +593,14 @@ class MessageOrchestrator:
             )
         )
 
+        # Model panel button callbacks
+        app.add_handler(
+            CallbackQueryHandler(
+                self._inject_deps(self._handle_model_callback),
+                pattern=r"^model:",
+            )
+        )
+
         # Sessions browser callbacks
         from .handlers import callback
 
@@ -908,6 +916,50 @@ class MessageOrchestrator:
             )
         except KeyError as e:
             await query.edit_message_text(str(e))
+
+    async def _handle_model_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle model:* callbacks for the model selection panel."""
+        query = update.callback_query
+        await query.answer()
+
+        user_id = query.from_user.id
+        pm = context.bot_data.get("provider_manager")
+        if not pm:
+            await query.edit_message_text("Provider 管理器不可用。")
+            return
+
+        data = query.data  # "model:<action>[:params...]"
+        parts = data.split(":", 2)  # ["model", "action", "rest..."]
+
+        if len(parts) < 2:
+            return
+
+        action = parts[1]
+        rest = parts[2] if len(parts) > 2 else ""
+
+        # Route by action
+        if action == "detail":
+            if rest:
+                await self._show_model_detail(pm, query, context, user_id, model_name=rest)
+        elif action == "toggle":
+            await self._handle_model_toggle(query, user_id, rest)
+        elif action == "1m":
+            await self._handle_model_1m_toggle(query, user_id, rest)
+        elif action == "save":
+            await self._handle_model_save(pm, query, context, user_id, rest)
+        elif action == "list" or action == "page":
+            page = int(rest) if rest else 0
+            await self._show_model_list(query, context, pm, user_id, page=page)
+        elif action == "search":
+            await self._enter_model_search(query, user_id)
+        elif action == "search_cancel":
+            await self._show_model_list(query, context, pm, user_id, page=0, search=None)
+        elif action == "filter":
+            await self._show_model_list(query, context, pm, user_id, page=0, search=rest)
+        elif action == "noop":
+            pass  # Page indicator button
 
     async def agentic_model(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
