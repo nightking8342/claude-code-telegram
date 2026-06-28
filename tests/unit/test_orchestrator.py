@@ -204,9 +204,9 @@ def test_agentic_registers_text_document_photo_handlers(agentic_settings, deps):
     # 6 message handlers (btw command, text, unknown commands passthrough,
     # document, photo, voice)
     assert len(msg_handlers) == 6
-    # 9 callback handlers (stop:, auq:, plan:, cd:, repo:, repo_use:,
-    # repo_back:, provider:, sessions:)
-    assert len(cb_handlers) == 9
+    # 11 callback handlers (stop:, auq:, plan:, cd:, repo:, repo_use:,
+    # repo_back:, provider:, model:, verbose:, sessions:)
+    assert len(cb_handlers) == 11
 
 
 async def test_agentic_bot_commands(agentic_settings, deps):
@@ -571,7 +571,7 @@ async def test_agentic_callback_scoped_to_cd_pattern(agentic_settings, deps):
         if isinstance(call[0][0], CallbackQueryHandler)
     ]
 
-    assert len(cb_handlers) == 9
+    assert len(cb_handlers) == 11
     # Find the cd: handler by pattern
     cd_handler = [h for h in cb_handlers if h.pattern and h.pattern.match("cd:x")]
     assert len(cd_handler) == 1
