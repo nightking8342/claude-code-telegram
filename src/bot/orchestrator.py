@@ -46,7 +46,7 @@ from .utils.image_extractor import (
     should_send_as_photo,
     validate_image_path,
 )
-from ..config.providers import _parse_context_suffix
+from ..config.providers import _VALID_ROLES, _parse_context_suffix
 
 logger = structlog.get_logger()
 
@@ -965,8 +965,6 @@ class MessageOrchestrator:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         """Show or override the model (supports per-role configuration)."""
-        from ..config.providers import _VALID_ROLES
-
         pm = context.bot_data.get("provider_manager")
         if not pm:
             await update.message.reply_text("Provider 管理器不可用。")
@@ -1040,7 +1038,7 @@ class MessageOrchestrator:
 
         role_emojis = {"opus": "\U0001f419", "sonnet": "\U0001f7e1", "haiku": "\U0001f7e2"}
         roles = pm.get_role_models()
-        for role in ("opus", "sonnet", "haiku"):
+        for role in _VALID_ROLES:
             rm = roles.get(role)
             if rm:
                 name, win = _parse_context_suffix(rm)
@@ -1104,7 +1102,11 @@ class MessageOrchestrator:
         search: Optional[str] = None,
     ) -> None:
         """Render the model list panel. Uses edit_message if source is callback query."""
-        models = await pm.fetch_models()
+        try:
+            models = await pm.fetch_models()
+        except Exception:
+            logger.warning("fetch_models failed in _show_model_list", exc_info=True)
+            models = []
 
         header = self._build_panel_status_header(pm)
 
