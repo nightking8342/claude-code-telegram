@@ -14,11 +14,12 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import structlog
 from telegram import (
     BotCommand,
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
@@ -45,6 +46,7 @@ from .utils.image_extractor import (
     should_send_as_photo,
     validate_image_path,
 )
+from ..config.providers import _parse_context_suffix
 
 logger = structlog.get_logger()
 
@@ -242,6 +244,7 @@ class MessageOrchestrator:
         # Metadata for "Other" free-text answers; the lock-bypass state lives
         # in StopAwareUpdateProcessor.auq_other_waiting (class-level set).
         self._auq_waiting_other: Dict[int, Dict[str, str]] = {}
+        self._model_panel_state: Dict[int, Dict[str, Any]] = {}
         self._known_commands: frozenset[str] = frozenset()
 
     def _inject_deps(self, handler: Callable) -> Callable:  # type: ignore[type-arg]
@@ -919,65 +922,9 @@ class MessageOrchestrator:
 
         args = update.message.text.split()[1:] if update.message.text else []
 
-        # ── No args: show current config ────────────────────────
+        # ── No args: show interactive model list panel ──────────
         if not args:
-            model = pm.get_effective_model() or "default"
-            ctx_window = pm.get_context_window()
-            source = pm.get_model_source()
-            ctx_label = (
-                f"{ctx_window // 1_000_000}M"
-                if ctx_window >= 1_000_000
-                else f"{ctx_window // 1_000}k"
-            )
-            rich_enabled = self._is_rich_messages_enabled(context)
-            roles = pm.get_role_models()
-
-            if rich_enabled:
-                # Rich Messages: render as markdown table
-                md_lines = [
-                    "# 🤖 模型配置\n",
-                    "| 项目 | 值 |",
-                    "|------|----|",
-                    f"| 默认模型 | `{model}` ({source}) |",
-                    f"| 上下文窗口 | {ctx_label} |",
-                ]
-                if roles:
-                    for role in _VALID_ROLES:
-                        rm = roles.get(role)
-                        if rm:
-                            md_lines.append(f"| {role} | `{rm}` |")
-                try:
-                    from .utils.telegram_rich import send_rich_message
-
-                    await send_rich_message(
-                        context.bot,
-                        update.message.chat_id,
-                        "\n".join(md_lines),
-                        reply_parameters={
-                            "message_id": update.message.message_id
-                        },
-                    )
-                    return
-                except Exception:
-                    rich_enabled = False
-
-            lines = [
-                "<b>🤖 模型配置</b>\n",
-                "<b>⚙️ 默认</b>",
-                f"<code>{model}</code>（{source}）",
-                f"窗口 {ctx_label}",
-            ]
-            if roles:
-                role_lines = []
-                for role in _VALID_ROLES:
-                    rm = roles.get(role)
-                    if rm:
-                        role_lines.append(
-                            f"<code>{role}</code> → <code>{rm}</code>"
-                        )
-                if role_lines:
-                    lines.append("\n" + "\n".join(role_lines))
-            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+            await self._show_model_list(update, context, pm, user_id=update.effective_user.id)
             return
 
         first = args[0].strip().lower()
@@ -1022,6 +969,129 @@ class MessageOrchestrator:
             f"下次请求时生效。",
             parse_mode="HTML",
         )
+
+    MODELS_PER_PAGE = 20
+
+    @staticmethod
+    def _build_panel_status_header(pm: Any) -> str:
+        """Build the status header showing current model assignment per role."""
+        active_name = pm.get_active_name() or "unknown"
+        default_raw = pm.get_effective_model() or "—"
+        default_name, default_win = _parse_context_suffix(default_raw)
+        default_label = f"{default_name} [{'1M' if default_win >= 1_000_000 else '200K'}]"
+
+        lines = [
+            f"\U0001f4cb 模型列表 — {active_name}",
+            "━" * 16,
+            f"默认: {default_label}",
+        ]
+
+        role_emojis = {"opus": "\U0001f419", "sonnet": "\U0001f7e1", "haiku": "\U0001f7e2"}
+        roles = pm.get_role_models()
+        for role in ("opus", "sonnet", "haiku"):
+            rm = roles.get(role)
+            if rm:
+                name, win = _parse_context_suffix(rm)
+                win_label = f"[{'1M' if win >= 1_000_000 else '200K'}]"
+                lines.append(f"{role_emojis[role]} {role}: {name} {win_label}")
+            else:
+                lines.append(f"{role_emojis[role]} {role}: —")
+
+        return "\n".join(lines)
+
+    def _build_model_list_markup(
+        self,
+        models: List[str],
+        page: int,
+        search: Optional[str] = None,
+    ) -> InlineKeyboardMarkup:
+        """Build inline keyboard for model list view."""
+        if search:
+            models = [m for m in models if search.lower() in m.lower()]
+            start, end = 0, self.MODELS_PER_PAGE
+        else:
+            total_pages = max(1, (len(models) + self.MODELS_PER_PAGE - 1) // self.MODELS_PER_PAGE)
+            page = max(0, min(page, total_pages - 1))
+            start = page * self.MODELS_PER_PAGE
+            end = min(start + self.MODELS_PER_PAGE, len(models))
+
+        row: List[InlineKeyboardButton] = []
+        for m in models[start:end]:
+            label = m if len(m) <= 40 else m[:37] + "..."
+            row.append(
+                InlineKeyboardButton(label, callback_data=f"model:detail:{m}")
+            )
+        keyboard = self._chunk_buttons(row, 2)
+
+        bottom_row: List[InlineKeyboardButton] = []
+        bottom_row.append(InlineKeyboardButton("\U0001f50d 搜索", callback_data="model:search"))
+
+        if search:
+            bottom_row.append(InlineKeyboardButton("❌ 取消搜索", callback_data="model:search_cancel"))
+        else:
+            total_pages = max(1, (len(models) + self.MODELS_PER_PAGE - 1) // self.MODELS_PER_PAGE)
+            if page > 0:
+                bottom_row.append(InlineKeyboardButton("⬅", callback_data=f"model:page:{page - 1}"))
+            bottom_row.append(InlineKeyboardButton(
+                f"{page + 1}/{total_pages}",
+                callback_data="model:noop"
+            ))
+            if page < total_pages - 1:
+                bottom_row.append(InlineKeyboardButton("➡", callback_data=f"model:page:{page + 1}"))
+
+        keyboard.append(bottom_row)
+        return InlineKeyboardMarkup(keyboard)
+
+    async def _show_model_list(
+        self,
+        update_or_query: Union[Update, CallbackQuery],
+        context: ContextTypes.DEFAULT_TYPE,
+        pm: Any,
+        user_id: int,
+        page: int = 0,
+        search: Optional[str] = None,
+    ) -> None:
+        """Render the model list panel. Uses edit_message if source is callback query."""
+        models = await pm.fetch_models()
+
+        header = self._build_panel_status_header(pm)
+
+        is_callback = hasattr(update_or_query, "data")
+        if not models:
+            text = f"{header}\n\n⚠️ 无法拉取模型列表，请检查 Provider 连接。"
+            markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("\U0001f504 重试", callback_data="model:list:0")
+            ]])
+        else:
+            text = header
+            markup = self._build_model_list_markup(models, page, search)
+
+        if is_callback:
+            query = update_or_query  # type: ignore
+            chat_id = query.message.chat_id
+            message_id = query.message.message_id
+        else:
+            msg = update_or_query.message  # type: ignore
+            chat_id = msg.chat_id
+            message_id = None
+
+        self._model_panel_state[user_id] = {
+            "page": page,
+            "search": search,
+            "chat_id": chat_id,
+            "message_id": message_id,
+        }
+
+        if is_callback and message_id:
+            query = update_or_query  # type: ignore
+            try:
+                await query.edit_message_text(text, reply_markup=markup)
+            except Exception:
+                await query.answer("面板已过期，请重新 /model", show_alert=True)
+        else:
+            sent = await update_or_query.message.reply_text(text, reply_markup=markup)  # type: ignore
+            self._model_panel_state[user_id]["message_id"] = sent.message_id
+            self._model_panel_state[user_id]["chat_id"] = sent.chat_id
 
     @staticmethod
     def _display_width(text: str) -> int:
