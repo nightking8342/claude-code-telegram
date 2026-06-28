@@ -329,8 +329,12 @@ class ClaudeCodeBot:
         }
 
         error_type = type(error)
+        error_name = error_type.__name__
+        error_detail = str(error)[:200] if error else ""
         user_message = error_messages.get(
-            error_type, "❌ An unexpected error occurred. Please try again."
+            error_type,
+            f"❌ 内部错误（{error_name}）\n{error_detail}\n\n"
+            "请稍后重试，或联系管理员。",
         )
 
         # Try to notify user
