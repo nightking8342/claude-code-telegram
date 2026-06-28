@@ -222,7 +222,7 @@ class ProviderManager:
                             status=resp.status,
                         )
                         return []
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError) as exc:
             logger.warning("fetch_models failed", url=url, error=str(exc))
             return []
 
