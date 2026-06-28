@@ -1,16 +1,16 @@
-# Model Selection Panel Design
+# 模型选择面板设计
 
-**Date:** 2026-06-28
-**Status:** Approved
-**Scope:** Replace `/model` text-only command with an interactive inline-keyboard panel supporting role assignment, context window toggles, model list fetch, pagination, and search.
+**日期：** 2026-06-28
+**状态：** 已批准
+**范围：** 将 `/model` 纯文本命令升级为交互式内联键盘面板，支持角色分配、上下文窗口切换、模型列表拉取、分页和搜索。
 
-## Summary
+## 概述
 
 将 `/model` 命令从纯文本交互升级为 Telegram Inline Keyboard 面板。无参数调用进入交互面板（模型列表 + 分页 + 搜索），有参数调用保留文本快捷方式。模型详情页支持以模型为中心勾选角色 + 开关 1M 上下文窗口。
 
 同时废弃顶层 `model_override` 字段，将默认模型归入 provider profile 的 `default_model`，与 `opus_model`/`sonnet_model`/`haiku_model` 统一。
 
-## UI Flow
+## UI 流程
 
 ### 入口：`/model` 无参数
 
@@ -245,10 +245,6 @@ _model_panel_state = {
 | 不相关用户点击按钮 | `query.answer("不是你打开的", show_alert=False)` |
 | 面板消息已被删除 | `query.answer("此面板已过期，请重新 /model", show_alert=True)` |
 
-## 检索的模型数量
-
-模型列表最多展示 **20 个模型**。超出部分通过分页展示，而非截断。
-
 ## 文件变更清单
 
 | 文件 | 变更 |
@@ -261,9 +257,10 @@ _model_panel_state = {
 - `src/claude/sdk_integration.py` — 模型仍通过 `get_effective_model()` 传入，接口不变
 - 测试文件 — 本次不新增（后续补齐）
 
-## Non-Goals
+## 不做（Non-Goals）
 
 - 不实现模型列表缓存（每次实时拉取）
 - 不实现模型列表的 API 字段推断（1M 支持由用户自行判断）
 - 不修改 Rich Messages 渲染管道（复用现有 `send_rich_message`）
 - 不修改 ProviderManager 的 `_write_overlay` 逻辑（模型变更自动触发覆盖层更新）
+- 不实现批量删除或多选操作
