@@ -961,6 +961,188 @@ class MessageOrchestrator:
         elif action == "noop":
             pass  # Page indicator button
 
+    # ── Model detail panel (role checkboxes + 1M toggles) ──────────
+
+    ROLES = ("default", "opus", "sonnet", "haiku")
+    ROLE_LABELS = {"default": "默认", "opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku"}
+
+    def _build_model_detail_markup(
+        self, model_name: str, state: Dict[str, Any]
+    ) -> InlineKeyboardMarkup:
+        """Build inline keyboard for model detail view with role checkboxes + 1M toggles."""
+        rows: List[List[InlineKeyboardButton]] = []
+
+        for role in self.ROLES:
+            role_checked = state["roles"].get(role, False)
+            role_icon = "✅" if role_checked else "◽"
+            role_btn = InlineKeyboardButton(
+                f"{role_icon} {self.ROLE_LABELS[role]}",
+                callback_data=f"model:toggle:{model_name}:{role}",
+            )
+
+            one_m_checked = state["context_1m"].get(role, False)
+            one_m_icon = "✅" if one_m_checked else "◽"
+            one_m_btn = InlineKeyboardButton(
+                f"1M {one_m_icon}",
+                callback_data=f"model:1m:{model_name}:{role}",
+            )
+
+            rows.append([role_btn, one_m_btn])
+
+        rows.append([
+            InlineKeyboardButton("💾 保存", callback_data=f"model:save:{model_name}"),
+            InlineKeyboardButton("📋 返回列表", callback_data="model:list:0"),
+        ])
+
+        return InlineKeyboardMarkup(rows)
+
+    async def _show_model_detail(
+        self,
+        pm: Any,
+        query: CallbackQuery,
+        context: ContextTypes.DEFAULT_TYPE,
+        user_id: int,
+        model_name: str,
+    ) -> None:
+        """Show the model detail page with role assignment checkboxes and 1M toggles."""
+        current_default = pm.get_effective_model() or ""
+        default_clean, _ = _parse_context_suffix(current_default)
+
+        role_models = pm.get_role_models()
+        roles_state: Dict[str, bool] = {}
+        context_1m_state: Dict[str, bool] = {}
+
+        for role in self.ROLES:
+            if role == "default":
+                assigned_model = default_clean
+                assigned_raw = pm.get_effective_model() or ""
+            else:
+                assigned_raw = role_models.get(role) or ""
+                assigned_model, _ = (
+                    _parse_context_suffix(assigned_raw)
+                    if assigned_raw
+                    else ("", 200_000)
+                )
+
+            is_active = assigned_model == model_name
+            roles_state[role] = is_active
+
+            _, win = _parse_context_suffix(assigned_raw) if assigned_raw else ("", 200_000)
+            context_1m_state[role] = win >= 1_000_000 and is_active
+
+        self._model_panel_state[user_id] = {
+            "active_model": model_name,
+            "roles": roles_state,
+            "context_1m": context_1m_state,
+            "chat_id": query.message.chat_id,
+            "message_id": query.message.message_id,
+        }
+
+        text = f"⚙️ {model_name}\n━━━━━━━━━━━━━━━━"
+        markup = self._build_model_detail_markup(model_name, self._model_panel_state[user_id])
+
+        try:
+            await query.edit_message_text(text, reply_markup=markup)
+        except Exception:
+            await query.answer("面板已过期，请重新 /model", show_alert=True)
+
+    async def _handle_model_toggle(
+        self, query: CallbackQuery, user_id: int, rest: str
+    ) -> None:
+        """Flip a role checkbox in model detail view."""
+        parts = rest.rsplit(":", 1)
+        if len(parts) != 2:
+            return
+        model_name, role = parts
+
+        state = self._model_panel_state.get(user_id)
+        if not state or state.get("active_model") != model_name:
+            await query.answer("此面板已过期，请重新 /model", show_alert=True)
+            return
+
+        if role not in self.ROLES:
+            return
+
+        state["roles"][role] = not state["roles"][role]
+
+        markup = self._build_model_detail_markup(model_name, state)
+        try:
+            await query.edit_message_reply_markup(reply_markup=markup)
+        except Exception:
+            pass
+
+    async def _handle_model_1m_toggle(
+        self, query: CallbackQuery, user_id: int, rest: str
+    ) -> None:
+        """Flip a 1M context window toggle in model detail view."""
+        parts = rest.rsplit(":", 1)
+        if len(parts) != 2:
+            return
+        model_name, role = parts
+
+        state = self._model_panel_state.get(user_id)
+        if not state or state.get("active_model") != model_name:
+            await query.answer("此面板已过期，请重新 /model", show_alert=True)
+            return
+
+        if role not in self.ROLES:
+            return
+
+        state["context_1m"][role] = not state["context_1m"][role]
+
+        markup = self._build_model_detail_markup(model_name, state)
+        try:
+            await query.edit_message_reply_markup(reply_markup=markup)
+        except Exception:
+            pass
+
+    async def _handle_model_save(
+        self,
+        pm: Any,
+        query: CallbackQuery,
+        context: ContextTypes.DEFAULT_TYPE,
+        user_id: int,
+        rest: str,
+    ) -> None:
+        """Save role assignments and 1M settings from model detail view."""
+        state = self._model_panel_state.get(user_id)
+        if not state or state.get("active_model") != rest:
+            await query.answer("此面板已过期，请重新 /model", show_alert=True)
+            return
+
+        active = pm.get_active()
+        if not active:
+            await query.answer("Provider 配置异常，请检查", show_alert=True)
+            return
+
+        model_name = state["active_model"]
+
+        for role in self.ROLES:
+            if not state["roles"].get(role, False):
+                continue
+
+            suffix = "[1m]" if state["context_1m"].get(role, False) else ""
+            full_name = f"{model_name}{suffix}"
+
+            if role == "default":
+                pm.set_default_model(full_name)
+            else:
+                pm.set_role_model(role, full_name)
+
+        # Return to list page
+        await self._show_model_list(query, context, pm, user_id, page=0)
+
+        # Toast: what was set
+        summary_parts = []
+        for role in self.ROLES:
+            if state["roles"].get(role, False):
+                suffix_label = " [1M]" if state["context_1m"].get(role, False) else ""
+                summary_parts.append(f"{self.ROLE_LABELS[role]}={model_name}{suffix_label}")
+        await query.answer(f"已保存: {', '.join(summary_parts)}", show_alert=False)
+
+        # Clean up panel state
+        self._model_panel_state.pop(user_id, None)
+
     async def agentic_model(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
