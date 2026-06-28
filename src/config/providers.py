@@ -1,5 +1,7 @@
 """Runtime provider profile management for switching API endpoints and models."""
 
+import asyncio
+import aiohttp
 import json
 import os
 import re
@@ -21,6 +23,7 @@ _ENV_KEYS = (
 # Context window suffixes: [1m] = 1,000,000 tokens, [200k] = 200,000, etc.
 _CONTEXT_SUFFIX_RE = re.compile(r"\[(\d+)(k|m)\]$", re.IGNORECASE)
 _DEFAULT_CONTEXT_WINDOW = 200_000
+_MODELS_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 # Role shorthand aliases
 _ROLE_ALIASES = {"o": "opus", "s": "sonnet", "h": "haiku"}
@@ -47,6 +50,15 @@ def _parse_context_suffix(model: str) -> Tuple[str, int]:
     unit = m.group(2).lower()
     multiplier = 1_000_000 if unit == "m" else 1_000
     return model[: m.start()], num * multiplier
+
+
+def _parse_models_response(data: dict) -> list:
+    """Extract, deduplicate, and sort model IDs from an OpenAI-compatible response."""
+    models = data.get("data", [])
+    ids = sorted(
+        {m["id"] for m in models if isinstance(m, dict) and "id" in m}
+    )
+    return ids
 
 
 @dataclass
@@ -172,6 +184,47 @@ class ProviderManager:
             logger.info("Default model set", model=model)
         else:
             logger.info("Default model cleared")
+
+    async def fetch_models(self) -> list:
+        """Fetch available models from the active provider's /v1/models endpoint.
+
+        Returns a sorted, deduplicated list of model IDs. Returns an empty list
+        on failure (network error, timeout, or unexpected response format).
+        """
+        active = self.get_active()
+        if not active or not active.base_url:
+            logger.warning("fetch_models: no active profile or base_url")
+            return []
+
+        url = active.base_url.rstrip("/") + "/v1/models"
+        headers = {}
+        if active.api_key:
+            headers["Authorization"] = f"Bearer {active.api_key}"
+        elif active.auth_token:
+            headers["Authorization"] = f"Bearer {active.auth_token}"
+
+        try:
+            async with aiohttp.ClientSession(timeout=_MODELS_TIMEOUT) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        models = _parse_models_response(data)
+                        logger.info(
+                            "fetch_models succeeded",
+                            url=url,
+                            count=len(models),
+                        )
+                        return models
+                    else:
+                        logger.warning(
+                            "fetch_models: non-200 response",
+                            url=url,
+                            status=resp.status,
+                        )
+                        return []
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.warning("fetch_models failed", url=url, error=str(exc))
+            return []
 
     def get_effective_model(self) -> Optional[str]:
         """Return the effective model name (may include [1m] suffix)."""

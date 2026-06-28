@@ -8,6 +8,7 @@ The overlay pins the active profile's provider/model env vars at the highest
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.config.providers import ProviderManager
 
@@ -146,3 +147,29 @@ def test_save_no_longer_writes_model_override(tmp_path):
     raw = json.loads(pm._storage_path.read_text(encoding="utf-8"))
     assert "model_override" not in raw
     assert raw["profiles"]["cpa"]["default_model"] == "some-model[1m]"
+
+
+def test_parse_models_response_dedup_and_sort():
+    """_parse_models_response 去重并按名称排序。"""
+    from src.config.providers import _parse_models_response
+
+    raw = {
+        "object": "list",
+        "data": [
+            {"id": "z-model", "object": "model"},
+            {"id": "a-model", "object": "model"},
+            {"id": "z-model", "object": "model"},
+            {"id": "b-model", "object": "model"},
+        ]
+    }
+    result = _parse_models_response(raw)
+    assert result == ["a-model", "b-model", "z-model"]
+
+
+def test_parse_models_response_empty():
+    """空 data 或异常格式返回空列表。"""
+    from src.config.providers import _parse_models_response
+
+    assert _parse_models_response({}) == []
+    assert _parse_models_response({"data": []}) == []
+    assert _parse_models_response({"data": [{"no_id": "x"}]}) == []
