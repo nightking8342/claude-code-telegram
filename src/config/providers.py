@@ -79,7 +79,6 @@ class ProviderManager:
         self._storage_path = storage_path
         self._profiles: Dict[str, ProviderProfile] = {}
         self._active_name: Optional[str] = None
-        self._model_override: Optional[str] = None
         self._load()
 
     # ── Persistence ──────────────────────────────────────────────
@@ -89,7 +88,6 @@ class ProviderManager:
             try:
                 data = json.loads(self._storage_path.read_text(encoding="utf-8"))
                 self._active_name = data.get("active")
-                self._model_override = data.get("model_override")
                 for name, pdata in data.get("profiles", {}).items():
                     self._profiles[name] = ProviderProfile(**pdata)
                 logger.info(
@@ -110,7 +108,6 @@ class ProviderManager:
         self._storage_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "active": self._active_name,
-            "model_override": self._model_override,
             "profiles": {n: asdict(p) for n, p in self._profiles.items()},
         }
         self._storage_path.write_text(
@@ -150,7 +147,6 @@ class ProviderManager:
                 f"Provider '{name}' not found. Available: {', '.join(self._profiles)}"
             )
         self._active_name = name
-        self._model_override = None  # clear override when switching provider
         self._save()
         logger.info("Switched provider", provider=name)
         return self._profiles[name]
@@ -163,20 +159,22 @@ class ProviderManager:
     def get_active_name(self) -> Optional[str]:
         return self._active_name
 
-    # ── Model override ───────────────────────────────────────────
+    # ── Default model ────────────────────────────────────────────
 
-    def set_model_override(self, model: Optional[str]) -> None:
-        self._model_override = model
+    def set_default_model(self, model: Optional[str]) -> None:
+        """Set the default model on the active profile (writes to profile.default_model)."""
+        active = self.get_active()
+        if not active:
+            raise RuntimeError("No active provider profile")
+        active.default_model = model
         self._save()
         if model:
-            logger.info("Model override set", model=model)
+            logger.info("Default model set", model=model)
         else:
-            logger.info("Model override cleared")
+            logger.info("Default model cleared")
 
     def get_effective_model(self) -> Optional[str]:
         """Return the effective model name (may include [1m] suffix)."""
-        if self._model_override:
-            return self._model_override
         active = self.get_active()
         if active and active.default_model:
             return active.default_model
@@ -200,8 +198,6 @@ class ProviderManager:
 
     def get_model_source(self) -> str:
         """Return where the effective model comes from."""
-        if self._model_override:
-            return "override"
         active = self.get_active()
         if active and active.default_model:
             return "profile"

@@ -12,13 +12,11 @@ from types import SimpleNamespace
 from src.config.providers import ProviderManager
 
 
-def _seed(tmp_path: Path, profiles: dict, active: str, model_override=None):
+def _seed(tmp_path: Path, profiles: dict, active: str):
     """Construct a ProviderManager from a pre-written providers.json."""
     storage = tmp_path / "providers.json"
     storage.write_text(
-        json.dumps(
-            {"active": active, "model_override": model_override, "profiles": profiles}
-        ),
+        json.dumps({"active": active, "profiles": profiles}),
         encoding="utf-8",
     )
     config = SimpleNamespace(claude_model=None, anthropic_api_key_str=None)
@@ -88,15 +86,11 @@ def test_build_env_overlay_includes_api_key_when_set(tmp_path):
     assert pm.build_env_overlay() == {"ANTHROPIC_API_KEY": "sk-direct"}
 
 
-def test_build_env_overlay_reflects_model_override(tmp_path):
-    """A /model override pins ANTHROPIC_MODEL but leaves base_url on the profile.
-
-    This is the core fix: the chosen model is sent to the profile's provider,
-    not whatever provider the CLI's user settings point at.
-    """
+def test_build_env_overlay_reflects_default_model_set_via_set_default_model(tmp_path):
+    """set_default_model pins ANTHROPIC_MODEL but leaves base_url on the profile."""
     pm = _seed(tmp_path, {"cpa": _FULL}, active="cpa")
 
-    pm.set_model_override("claude-opus-4-8")
+    pm.set_default_model("claude-opus-4-8")
     overlay = pm.build_env_overlay()
 
     assert overlay["ANTHROPIC_MODEL"] == "claude-opus-4-8"
@@ -113,7 +107,42 @@ def test_overlay_file_written_and_refreshed(tmp_path):
     assert env["ANTHROPIC_BASE_URL"] == "https://cpa.example"
     assert env["ANTHROPIC_MODEL"] == "mimo[1m]"
 
-    pm.set_model_override("claude-opus-4-8")
+    pm.set_default_model("claude-opus-4-8")
     env = json.loads(overlay_file.read_text(encoding="utf-8"))["env"]
     assert env["ANTHROPIC_MODEL"] == "claude-opus-4-8"
     assert env["ANTHROPIC_BASE_URL"] == "https://cpa.example"
+
+
+def test_set_default_model_clears_when_none(tmp_path):
+    pm = _seed(tmp_path, {"cpa": _FULL}, active="cpa")
+    pm.set_default_model(None)
+    profile = pm.get_active()
+    assert profile.default_model is None
+    assert pm.get_effective_model() is None
+
+
+def test_switch_profile_no_longer_clears_model_override(tmp_path):
+    pm = _seed(
+        tmp_path,
+        {"a": {**_SPARSE, "name": "a", "default_model": "model-a[1m]"},
+         "b": {**_SPARSE, "name": "b", "default_model": "model-b[200k]"}},
+        active="a",
+    )
+    assert pm.get_effective_model() == "model-a[1m]"
+    pm.switch_profile("b")
+    assert pm.get_effective_model() == "model-b[200k]"
+    pm.switch_profile("a")
+    assert pm.get_effective_model() == "model-a[1m]"
+
+
+def test_get_model_source_no_more_override(tmp_path):
+    pm = _seed(tmp_path, {"cpa": _FULL}, active="cpa")
+    assert pm.get_model_source() == "profile"
+
+
+def test_save_no_longer_writes_model_override(tmp_path):
+    pm = _seed(tmp_path, {"cpa": _FULL}, active="cpa")
+    pm.set_default_model("some-model[1m]")
+    raw = json.loads(pm._storage_path.read_text(encoding="utf-8"))
+    assert "model_override" not in raw
+    assert raw["profiles"]["cpa"]["default_model"] == "some-model[1m]"

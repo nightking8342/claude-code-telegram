@@ -984,7 +984,7 @@ class MessageOrchestrator:
 
         # ── /model reset: clear all overrides ───────────────────
         if first == "reset":
-            pm.set_model_override(None)
+            pm.set_default_model(None)
             for role in _VALID_ROLES:
                 pm.set_role_model(role, None)
             model = pm.get_effective_model() or "default"
@@ -1015,7 +1015,7 @@ class MessageOrchestrator:
             return
 
         # ── /model <name>: set default model override ───────────
-        pm.set_model_override(first)
+        pm.set_default_model(first)
         await update.message.reply_text(
             f"模型覆盖已设置：<code>{first}</code>\n"
             f"Provider：{pm.get_active_name() or 'default'}\n"
